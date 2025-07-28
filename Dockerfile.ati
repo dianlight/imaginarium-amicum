@@ -1,0 +1,90 @@
+# Dockerfile.ati
+
+# --- Stage 1: Build the Go application and Go bindings for llama.cpp and stable-diffusion.cpp ---
+# Use an AMD ROCm development base image for GPU acceleration.
+FROM rocm/dev-ubuntu-22.04:latest AS builder
+
+# Argument to pass GPU layers value at build time
+ARG GPU_LAYERS=-1 # Default to all layers for AMD GPU
+
+# Install Go compiler
+# Note: rocm images might come with an older Go. Ensure golang-1.22 is installed.
+RUN apt-get update && apt-get install -y golang-1.22 \
+    && rm -rf /var/lib/apt/lists/*
+ENV PATH="/usr/lib/go-1.22/bin:${PATH}"
+
+# Install build dependencies required by llama.cpp and stable-diffusion.cpp
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    cmake \
+    git \
+    wget \
+    libjpeg-dev \
+    libpng-dev \
+    libtiff-dev \
+    libwebp-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy the Makefile into the build context
+COPY Makefile .
+
+# Build the bindings using the Makefile target
+# BUILD_TYPE is 'hipblas' for AMD GPU compilation
+# Set CC and CXX explicitly for ROCm's clang compilers
+RUN CC=/opt/rocm/llvm/bin/clang CXX=/opt/rocm/llvm/bin/clang++ make build-bindings-for-docker BUILD_TYPE=hipblas CGO_LDFLAGS="-O3 --hip-link --rtlib=compiler-rt -lrocblas -lhipblas -L/opt/rocm/lib"
+
+# Copy the Go application source code
+COPY . .
+
+# Build the Go application executable
+# CGO_ENABLED=1 is crucial for Go to link with C/C++ libraries.
+# LIBRARY_PATH and C_INCLUDE_PATH tell the Go compiler where to find the static libraries (.a)
+# and their corresponding header files for CGO.
+# Include ROCm library paths. Pass GPU_LAYERS via ldflags.
+ENV LIBRARY_PATH=/app/binding/go-llama.cpp:/app/binding/go-sd.cpp:/opt/rocm/lib
+ENV C_INCLUDE_PATH=/app/binding/go-llama.cpp:/app/binding/go-sd.cpp:/opt/rocm/include
+RUN CGO_LDFLAGS="-L${LIBRARY_PATH} -lrocblas -lhipblas -O3 --hip-link --rtlib=compiler-rt -L/opt/rocm/lib" CGO_ENABLED=1 go build -o main -ldflags="-X main.gpuLayersStr=${GPU_LAYERS}" .
+
+# --- Stage 2: Create the final runtime image ---
+# Use an AMD ROCm runtime base image for the final stage.
+FROM rocm/runtime-ubuntu-22.04:latest
+
+# Install runtime dependencies for the C++ components
+RUN apt-get update && apt-get install -y \
+    wget \
+    libjpeg-turbo8 \
+    libpng16-16 \
+    libtiff5 \
+    libwebp6 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy the built Go application executable from the builder stage
+COPY --from=builder /app/main .
+# Copy the static frontend files
+COPY --from=builder /app/web web/
+# Copy the static libraries built with GPU support (if dynamic linking is ever an issue)
+COPY --from=builder /app/binding/go-llama.cpp/libbinding.a /app/libbinding_llama.a
+COPY --from=builder /app/binding/go-sd.cpp/libbinding.a /app/libbinding_sd.a
+
+# Set environment variables for the runtime. LD_LIBRARY_PATH is crucial for ROCm libraries.
+ENV LIBRARY_PATH=/app:/opt/rocm/lib
+ENV LD_LIBRARY_PATH=/app:/opt/rocm/lib
+
+# Create a directory to store the AI models
+RUN mkdir -p models
+
+# Copy the downloaded models from the host into the container.
+# The `pull-models` Makefile target ensures these are present on the host.
+COPY ./models/llama-2-7b-chat.Q4_K_M.gguf $(MODELS_DIR)/
+COPY ./models/v1-5-pruned-emaonly.safetensors $(MODELS_DIR)/
+
+# Expose the port where the Go application will listen
+EXPOSE 8080
+
+# Define the command to run the application when the container starts
+CMD ["/app/main"]
+

@@ -1,0 +1,184 @@
+<!-- web/index.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Go Llama & Stable Diffusion Chat</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+            background-color: #f3f4f6;
+        }
+        /* Custom scrollbar for chat container */
+        .chat-container::-webkit-scrollbar {
+            width: 8px;
+        }
+        .chat-container::-webkit-scrollbar-track {
+            background: #e0e0e0;
+            border-radius: 10px;
+        }
+        .chat-container::-webkit-scrollbar-thumb {
+            background: #888;
+            border-radius: 10px;
+        }
+        .chat-container::-webkit-scrollbar-thumb:hover {
+            background: #555;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen flex flex-col items-center justify-center p-4">
+    <div class="w-full max-w-7xl bg-white rounded-lg shadow-xl flex flex-col md:flex-row h-[90vh] overflow-hidden">
+        <!-- Image Panel (Top on mobile, Right on desktop) -->
+        <div id="image-panel" class="md:w-1/2 flex items-center justify-center bg-gray-50 p-4 border-b md:border-b-0 md:border-l border-gray-200 order-first md:order-last">
+            <div class="text-center text-gray-500">
+                <p class="text-lg mb-2">Generated Image</p>
+                <!-- Initial placeholder image -->
+                <img id="generated-image" src="https://placehold.co/400x300/e5e7eb/6b7280?text=AI+Generated+Image" alt="Generated Image" class="max-w-full h-auto rounded-lg shadow-md border border-gray-300">
+                <!-- Displays the prompt used for image generation -->
+                <p id="image-prompt-display" class="mt-4 text-sm text-gray-600 break-words max-h-32 overflow-y-auto custom-scrollbar p-2 bg-gray-100 rounded-md"></p>
+            </div>
+        </div>
+
+        <!-- Chat Panel (Bottom on mobile, Left on desktop) -->
+        <div class="md:w-1/2 flex flex-col h-full bg-white p-4">
+            <div class="flex-grow overflow-y-auto chat-container p-2 space-y-4">
+                <div id="messages" class="flex flex-col space-y-4">
+                    <!-- Initial welcome message -->
+                    <div class="flex justify-start">
+                        <div class="bg-blue-500 text-white p-3 rounded-xl rounded-bl-none shadow-md max-w-[80%]">
+                            Welcome! Ask me anything.
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="mt-4 flex items-center space-x-2">
+                <button id="newChatButton" class="bg-red-500 hover:bg-red-600 text-white font-semibold py-2 px-4 rounded-full shadow-md transition duration-200 ease-in-out transform hover:scale-105">
+                    New Chat
+                </button>
+                <input type="text" id="messageInput" class="flex-grow border border-gray-300 rounded-full px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Type your message...">
+                <button id="sendButton" class="bg-blue-500 hover:bg-blue-600 text-white font-semibold py-2 px-4 rounded-full shadow-md transition duration-200 ease-in-out transform hover:scale-105">
+                    Send
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const messageInput = document.getElementById('messageInput');
+        const sendButton = document.getElementById('sendButton');
+        const newChatButton = document.getElementById('newChatButton');
+        const messagesDiv = document.getElementById('messages');
+        const generatedImage = document.getElementById('generated-image');
+        const imagePromptDisplay = document.getElementById('image-prompt-display');
+
+        let ws;
+
+        // Function to establish WebSocket connection
+        function connectWebSocket() {
+            ws = new WebSocket('ws://' + window.location.host + '/ws');
+
+            ws.onopen = () => {
+                console.log('Connected to WebSocket');
+            };
+
+            // Handle incoming messages from the WebSocket server
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                if (data.type === 'chatUpdate') {
+                    // Update chat history and potentially the image
+                    renderChatHistory(data.history);
+                } else if (data.type === 'status') {
+                    // Display status messages (e.g., "New chat started!")
+                    const statusMessageDiv = document.createElement('div');
+                    statusMessageDiv.className = 'flex justify-center text-sm text-gray-500 italic';
+                    statusMessageDiv.textContent = data.content;
+                    messagesDiv.appendChild(statusMessageDiv);
+                    messagesDiv.scrollTop = messagesDiv.scrollHeight; // Scroll to bottom
+                }
+            };
+
+            // Attempt to reconnect on WebSocket close
+            ws.onclose = () => {
+                console.log('Disconnected from WebSocket. Attempting to reconnect...');
+                setTimeout(connectWebSocket, 3000); // Reconnect after 3 seconds
+            };
+
+            // Log WebSocket errors
+            ws.onerror = (err) => {
+                console.error('WebSocket error:', err);
+                ws.close(); // Close to trigger reconnect
+            };
+        }
+
+        // Function to send a message via WebSocket
+        function sendMessage() {
+            const content = messageInput.value.trim();
+            if (content) {
+                const message = { role: 'user', content: content };
+                ws.send(JSON.stringify(message));
+                messageInput.value = ''; // Clear input field
+            }
+        }
+
+        // Renders the chat history and updates the image panel
+        function renderChatHistory(history) {
+            messagesDiv.innerHTML = ''; // Clear existing messages before re-rendering
+            history.forEach(msg => {
+                const messageBubble = document.createElement('div');
+                
+                if (msg.role === 'user') {
+                    messageBubble.className = 'flex justify-end';
+                    messageBubble.innerHTML = `
+                        <div class="bg-blue-500 text-white p-3 rounded-xl rounded-br-none shadow-md max-w-[80%]">
+                            ${msg.content}
+                        </div>
+                    `;
+                } else { // assistant
+                    messageBubble.className = 'flex justify-start';
+                    messageBubble.innerHTML = `
+                        <div class="bg-gray-200 text-gray-800 p-3 rounded-xl rounded-bl-none shadow-md max-w-[80%]">
+                            ${msg.content}
+                        </div>
+                    `;
+                    // If the assistant message includes an image, update the image panel
+                    if (msg.image) {
+                        generatedImage.src = msg.image;
+                        // For placeholder images, extract the 'text' part from the URL for display
+                        if (msg.image.startsWith('https://placehold.co/')) {
+                            const urlParams = new URLSearchParams(msg.image.split('?')[1]);
+                            const textParam = urlParams.get('text');
+                            imagePromptDisplay.textContent = textParam ? decodeURIComponent(textParam) : 'Image generated.';
+                        } else {
+                            // For actual base64 images, display a generic message
+                            imagePromptDisplay.textContent = 'Image generated from response.';
+                        }
+                    }
+                }
+                messagesDiv.appendChild(messageBubble);
+            });
+            messagesDiv.scrollTop = messagesDiv.scrollHeight; // Scroll to the latest message
+        }
+
+        // Event listeners for sending messages and starting a new chat
+        sendButton.addEventListener('click', sendMessage);
+        messageInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                sendMessage();
+            }
+        });
+
+        newChatButton.addEventListener('click', () => {
+            ws.send(JSON.stringify({ content: '/newchat' })); // Send special command to start new chat
+        });
+
+        // Initialize WebSocket connection when the page loads
+        connectWebSocket();
+    </script>
+</body>
+</html>

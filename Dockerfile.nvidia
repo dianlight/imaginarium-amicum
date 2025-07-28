@@ -1,0 +1,84 @@
+# Dockerfile.nvidia
+
+# --- Stage 1: Build the Go application and Go bindings for llama.cpp and stable-diffusion.cpp ---
+# Use an Nvidia CUDA base image for GPU acceleration.
+FROM nvidia/cuda:12.3.2-devel-ubuntu22.04 AS builder
+
+# Argument to pass GPU layers value at build time
+ARG GPU_LAYERS=-1 # Default to all layers for Nvidia GPU
+
+# Install Go compiler
+RUN apt-get update && apt-get install -y golang-1.22 \
+    && rm -rf /var/lib/apt/lists/*
+ENV PATH="/usr/lib/go-1.22/bin:${PATH}"
+
+# Install build dependencies required by llama.cpp and stable-diffusion.cpp
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    cmake \
+    git \
+    wget \
+    libjpeg-dev \
+    libpng-dev \
+    libtiff-dev \
+    libwebp-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy the Makefile into the build context
+COPY Makefile .
+
+# Build the bindings using the Makefile target
+# BUILD_TYPE is 'cublas' for Nvidia GPU compilation
+RUN make build-bindings-for-docker BUILD_TYPE=cublas CGO_LDFLAGS="-lcublas -lcudart -L/usr/local/cuda/lib64/"
+
+# Copy the Go application source code
+COPY . .
+
+# Build the Go application executable
+ENV LIBRARY_PATH=/app/binding/go-llama.cpp:/app/binding/go-sd.cpp:/usr/local/cuda/lib64/
+ENV C_INCLUDE_PATH=/app/binding/go-llama.cpp:/app/binding/go-sd.cpp:/usr/local/cuda/include/
+RUN CGO_LDFLAGS="-L${LIBRARY_PATH} -lcublas -lcudart" CGO_ENABLED=1 go build -o main -ldflags="-X main.gpuLayersStr=${GPU_LAYERS}" .
+
+# --- Stage 2: Create the final runtime image ---
+# Use an Nvidia CUDA runtime base image for the final stage.
+FROM nvidia/cuda:12.3.2-runtime-ubuntu22.04
+
+# Install runtime dependencies for the C++ components
+RUN apt-get update && apt-get install -y \
+    wget \
+    libjpeg-turbo8 \
+    libpng16-16 \
+    libtiff5 \
+    libwebp6 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy the built Go application executable from the builder stage
+COPY --from=builder /app/main .
+# Copy the static frontend files
+COPY --from=builder /app/web web/
+# Copy the static libraries built with GPU support (if dynamic linking is ever an issue)
+COPY --from=builder /app/binding/go-llama.cpp/libbinding.a /app/libbinding_llama.a
+COPY --from=builder /app/binding/go-sd.cpp/libbinding.a /app/libbinding_sd.a
+
+# Set environment variables for the runtime. LD_LIBRARY_PATH is crucial for CUDA libraries.
+ENV LIBRARY_PATH=/app:/usr/local/cuda/lib64/
+ENV LD_LIBRARY_PATH=/app:/usr/local/cuda/lib64/
+
+# Create a directory to store the AI models
+RUN mkdir -p models
+
+# Copy the downloaded models from the host into the container.
+# The `pull-models` Makefile target ensures these are present on the host.
+COPY ./models/llama-2-7b-chat.Q4_K_M.gguf $(MODELS_DIR)/
+COPY ./models/v1-5-pruned-emaonly.safetensors $(MODELS_DIR)/
+
+# Expose the port where the Go application will listen
+EXPOSE 8080
+
+# Define the command to run the application when the container starts
+CMD ["/app/main"]
+
