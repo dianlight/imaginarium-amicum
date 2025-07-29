@@ -6,7 +6,6 @@ import (
 	"embed"
 	"encoding/base64"
 	"fmt"
-	"image/png"
 	"io"
 	"log"
 	"net/http"
@@ -378,16 +377,18 @@ func (h *Hub) handleChatMessage(session *ChatSession, userMessage ChatMessage) {
 	// 4. Generate image based on AI response (re-added)
 	log.Printf("Generating image based on AI response: %s", assistantResponse)
 	// Optionally, add negative prompts or other SD parameters here
-	sdOpts := sd.DefaultOptions
-	sdOpts.BatchCount = 1
-	sdOpts.Width = 512
-	sdOpts.Height = 512
-	//sdOpts.SampleMethod = sd.SampleMethodEulerA
-	sdOpts.SampleSteps = 20
-	sdOpts.CfgScale = 7.0
-	sdOpts.ClipSkip = 1 // Common setting for SD 1.5
-	sdOpts.NegativePrompt = "ugly, deformed, disfigured, low quality, bad anatomy, bad art, blurry, out of focus"
+	sdOpts := sd.DefaultFullParams
+    // NegativePrompt:   "out of frame, lowers, text, error, cropped, worst quality, low quality, jpeg artifacts, ugly, duplicate, morbid, mutilated, out of frame, extra fingers, mutated hands, poorly drawn hands, poorly drawn face, mutation, deformed, blurry, dehydrated, bad anatomy, bad proportions, extra limbs, cloned face, disfigured, gross proportions, malformed limbs, missing arms, missing legs, extra arms, extra legs, fused fingers, too many fingers, long neck, username, watermark, signature",
+	//CfgScale:         7.0,
+	//Width:            512,
+	//Height:           512,
+	//SampleMethod:     EULER_A,
+	//SampleSteps:      20,
+	//Strength:         0.4,
+	//Seed:             42,
 	sdOpts.Seed = uint32(time.Now().UnixNano()) // Use a new seed for each image
+	//BatchCount:       1,
+	//OutputsImageType: PNG,
 
 	var imgBuf bytes.Buffer
 	var imgs []io.Writer

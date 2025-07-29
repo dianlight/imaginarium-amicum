@@ -345,7 +345,7 @@ jobs:
         with:
           msystem: MINGW64
           update: true
-          install: make git
+          install: make git go 
 
       - name: Install NVIDIA CUDA Toolkit on Windows (Example - very complex for hosted runners)
         run: |
@@ -402,7 +402,7 @@ jobs:
         with:
           msystem: MINGW64
           update: true
-          install: make git
+          install: make git go
 
       - name: Install AMD ROCm Toolkit on Windows (Example - highly experimental for hosted runners)
         run: |
