@@ -3,25 +3,93 @@
 name: Build and Publish Release
 
 on:
-  release:
-    types: [created] # Trigger on release creation (including drafts)
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - '.github/**' # Don't trigger on workflow file changes themselves
+    # Trigger only if commit message starts with "Release "
+    # This uses a basic check; for more robust regex, consider a separate step.
+    # Note: `if:` conditions for `on:push` are tricky, safer to filter in a job.
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g., v1.0.0)'
+        required: true
+        type: string
 
 jobs:
-  # --- Linux CPU Build ---
+  # --- Step 1: Get Release Version and Check for Existence ---
+  get-release-version:
+    name: Get Release Version & Check Existence
+    runs-on: ubuntu-latest
+    outputs:
+      release_tag: ${{ steps.set_tag.outputs.release_tag }} # Expose the determined tag
+
+    steps:
+      - name: Checkout code (needed for gh cli and context)
+        uses: actions/checkout@v4
+
+      - name: Set release tag from push commit message
+        id: set_tag_push
+        if: github.event_name == 'push'
+        run: |
+          COMMIT_MESSAGE="${{ github.event.head_commit.message }}"
+          # Regex to extract version like v1.0.0 from "Release v1.0.0"
+          if [[ "$COMMIT_MESSAGE" =~ ^Release\ (v[0-9]+\.[0-9]+\.[0-9]+.*) ]]; then
+            RELEASE_TAG="${BASH_REMATCH[1]}"
+            echo "Determined release tag from commit message: $RELEASE_TAG"
+            echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          else
+            echo "Commit message does not match 'Release <version>' pattern."
+            exit 1 # Fail if message doesn't match
+          fi
+
+      - name: Set release tag from workflow_dispatch input
+        id: set_tag_dispatch
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          RELEASE_TAG="${{ github.event.inputs.version }}"
+          echo "Determined release tag from workflow_dispatch input: $RELEASE_TAG"
+          echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Consolidate tag for subsequent steps
+        id: set_tag
+        run: |
+          # Use the tag from push, or dispatch, prioritizing dispatch if both could be present (unlikely with this setup)
+          FINAL_TAG="${{ steps.set_tag_push.outputs.release_tag || steps.set_tag_dispatch.outputs.release_tag }}"
+          echo "FINAL_TAG=$FINAL_TAG"
+          echo "release_tag=$FINAL_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Check if release already exists
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG_NAME="${{ steps.set_tag.outputs.release_tag }}"
+          echo "Checking if release '$TAG_NAME' already exists..."
+          # `gh release view` exits with non-zero if release doesn't exist
+          if gh release view "$TAG_NAME" &> /dev/null; then
+            echo "Error: Release '$TAG_NAME' already exists. Aborting workflow."
+            exit 1 # Fail the job if release exists
+          else
+            echo "Release '$TAG_NAME' does not exist. Proceeding with builds."
+          fi
+
+  # --- Build Jobs (now depend on get-release-version) ---
   build-linux-cpu:
     name: Build Linux (CPU)
-    runs-on: ubuntu-latest # Standard Linux runner
-
+    runs-on: ubuntu-latest
+    needs: get-release-version # Depends on the version determination and existence check
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          submodules: recursive # Ensure submodules are cloned for go-llama.cpp
+          submodules: recursive
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24' # Ensure this matches your Go version in Makefile/Dockerfiles
+          go-version: '1.24'
 
       - name: Cache Go modules
         uses: actions/cache@v4
@@ -49,14 +117,13 @@ jobs:
         with:
           name: imaginarium-amicum-linux-cpu
           path: main_linux_amd64
-          if-no-files-found: error # Fail the workflow if the artifact is not found
+          if-no-files-found: error
 
-  # --- Linux NVIDIA GPU Build (Requires specialized runner) ---
+  # --- Linux NVIDIA GPU Build ---
   build-linux-nvidia:
     name: Build Linux (NVIDIA GPU)
-    runs-on: ubuntu-latest # You'll likely need a self-hosted runner with CUDA installed for this to work
-    # Alternatively, consider a Docker-in-Docker setup with a CUDA image, but that's more complex
-
+    runs-on: ubuntu-latest
+    needs: get-release-version # Depends on the version determination and existence check
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -87,15 +154,10 @@ jobs:
             ${{ runner.os }}-llama-binding-
 
       - name: Install NVIDIA CUDA Toolkit (Example - may vary based on runner)
-        # This step is highly dependent on the runner environment.
-        # For standard ubuntu-latest, you'd need to manually install CUDA drivers and toolkit.
-        # For self-hosted runners, ensure CUDA is pre-installed.
         run: |
           sudo apt-get update
-          # Example: sudo apt-get install -y nvidia-cuda-toolkit # This might be enough for compilation
-          # A full CUDA installation on a GitHub-hosted runner is not straightforward.
           echo "Please ensure CUDA Toolkit is available on your runner for GPU builds."
-        continue-on-error: true # Allow workflow to continue if CUDA install fails on default runner
+        continue-on-error: true
 
       - name: Build for Linux (NVIDIA GPU)
         run: make build-linux-nvidia
@@ -107,11 +169,11 @@ jobs:
           path: main_linux_nvidia
           if-no-files-found: error
 
-  # --- Linux AMD GPU Build (Requires specialized runner) ---
+  # --- Linux AMD GPU Build ---
   build-linux-ati:
     name: Build Linux (AMD GPU)
-    runs-on: ubuntu-latest # You'll likely need a self-hosted runner with ROCm installed for this to work
-
+    runs-on: ubuntu-latest
+    needs: get-release-version # Depends on the version determination and existence check
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -142,8 +204,6 @@ jobs:
             ${{ runner.os }}-llama-binding-
 
       - name: Install AMD ROCm Toolkit (Example - highly specialized)
-        # ROCm installation on standard GitHub-hosted runners is not supported.
-        # This job requires a self-hosted runner with ROCm pre-installed and configured.
         run: |
           echo "Please ensure ROCm Toolkit is available on your runner for AMD GPU builds."
         continue-on-error: true
@@ -161,8 +221,8 @@ jobs:
   # --- macOS Apple Silicon (Metal) Build ---
   build-macos-apple:
     name: Build macOS (Apple Silicon/Metal)
-    runs-on: macos-latest # Apple Silicon runner is often 'macos-latest' with arm64 architecture
-
+    runs-on: macos-latest
+    needs: get-release-version # Depends on the version determination and existence check
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -205,8 +265,8 @@ jobs:
   # --- Windows CPU Build ---
   build-windows-cpu:
     name: Build Windows (CPU)
-    runs-on: windows-latest # Standard Windows runner
-
+    runs-on: windows-latest
+    needs: get-release-version # Depends on the version determination and existence check
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -243,14 +303,14 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: imaginarium-amicum-windows-cpu
-          path: main_windows_amd64.exe # Note the .exe extension for Windows
+          path: main_windows_amd64.exe
           if-no-files-found: error
 
-  # --- Windows NVIDIA GPU Build (Requires specialized runner) ---
+  # --- Windows NVIDIA GPU Build ---
   build-windows-nvidia:
     name: Build Windows (NVIDIA GPU)
-    runs-on: windows-latest # You'll likely need a self-hosted runner with CUDA installed for this to work
-
+    runs-on: windows-latest
+    needs: get-release-version # Depends on the version determination and existence check
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -285,18 +345,15 @@ jobs:
         with:
           msystem: MINGW64
           update: true
-          install: make git # Ensure make is available for go-llama.cpp binding build
+          install: make git
 
       - name: Install NVIDIA CUDA Toolkit on Windows (Example - very complex for hosted runners)
-        # This step is highly dependent on the runner environment.
-        # For standard windows-latest, manually installing CUDA is very difficult.
-        # This job most likely requires a self-hosted runner with CUDA pre-installed.
         run: |
           echo "Please ensure CUDA Toolkit is available on your runner for GPU builds on Windows."
         continue-on-error: true
 
       - name: Build for Windows (NVIDIA GPU)
-        shell: msys2 {0} # Use MSYS2 shell to run make command
+        shell: msys2 {0}
         run: make build-windows-nvidia
 
       - name: Upload Windows NVIDIA GPU Artifact
@@ -306,11 +363,11 @@ jobs:
           path: main_windows_nvidia.exe
           if-no-files-found: error
 
-  # --- Windows AMD GPU Build (Requires specialized runner) ---
+  # --- Windows AMD GPU Build ---
   build-windows-ati:
     name: Build Windows (AMD GPU)
-    runs-on: windows-latest # You'll likely need a self-hosted runner with ROCm installed for this to work
-
+    runs-on: windows-latest
+    needs: get-release-version # Depends on the version determination and existence check
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -345,17 +402,15 @@ jobs:
         with:
           msystem: MINGW64
           update: true
-          install: make git # Ensure make is available for go-llama.cpp binding build
+          install: make git
 
       - name: Install AMD ROCm Toolkit on Windows (Example - highly experimental for hosted runners)
-        # This is extremely experimental for standard GitHub-hosted runners.
-        # This job almost certainly requires a self-hosted runner with ROCm pre-installed.
         run: |
           echo "Please ensure ROCm Toolkit is available on your runner for AMD GPU builds on Windows."
         continue-on-error: true
 
       - name: Build for Windows (AMD GPU)
-        shell: msys2 {0} # Use MSYS2 shell to run make command
+        shell: msys2 {0}
         run: make build-windows-ati
 
       - name: Upload Windows AMD GPU Artifact
@@ -370,6 +425,7 @@ jobs:
     name: Publish Release
     runs-on: ubuntu-latest
     needs:
+      - get-release-version
       - build-linux-cpu
       - build-linux-nvidia
       - build-linux-ati
@@ -383,32 +439,31 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Get release tag
+      - name: Get release tag from previous job
         id: get_tag
-        run: echo "RELEASE_TAG=${{ github.event.release.tag_name }}" >> $GITHUB_ENV
+        run: echo "RELEASE_TAG=${{ needs.get-release-version.outputs.release_tag }}" >> $GITHUB_ENV
 
       - name: Download all build artifacts
         uses: actions/download-artifact@v4
         with:
-          path: ./release_artifacts # Download all artifacts to this directory
+          path: ./release_artifacts
 
       - name: List downloaded artifacts (for verification)
         run: ls -R ./release_artifacts
 
-      - name: Attach artifacts to release and publish
+      - name: Create release and attach artifacts
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ env.RELEASE_TAG }}
         run: |
-          # The gh CLI is pre-installed on GitHub-hosted runners
-          RELEASE_ID=${{ github.event.release.id }}
-          TAG_NAME=${{ env.RELEASE_TAG }}
+          echo "Creating GitHub release '$RELEASE_TAG'..."
+          gh release create "$RELEASE_TAG" \
+            --title "$RELEASE_TAG" \
+            --notes "Automated release for $RELEASE_TAG built by GitHub Actions."
 
-          echo "Attaching artifacts to release ID: $RELEASE_ID"
+          echo "Attaching artifacts to release '$RELEASE_TAG'..."
           for artifact_dir in ./release_artifacts/*/; do
             ARTIFACT_NAME=$(basename "$artifact_dir")
             echo "Processing artifact: $ARTIFACT_NAME"
-            find "$artifact_dir" -type f -print0 | xargs -0 -I {} gh release upload "$TAG_NAME" {} --clobber
+            find "$artifact_dir" -type f -print0 | xargs -0 -I {} gh release upload "$RELEASE_TAG" {} --clobber
           done
-
-          echo "Publishing release..."
-          gh release edit "$TAG_NAME" --draft=false
