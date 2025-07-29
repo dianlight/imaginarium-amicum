@@ -35,7 +35,7 @@ all: build-linux-cpu # Default target builds for Linux CPU
 
 # Linux (AMD64 CPU)
 .PHONY: build-linux-cpu run-linux-cpu
-build-linux-cpu: ensure-go-modules ensure-llama-binding
+build-linux-cpu: ensure-llama-binding ensure-go-modules 
 	@echo "Building for Linux (CPU)..."
 	@cd binding/go-llama.cpp && make libbinding.a BUILD_TYPE=cpu CGO_LDFLAGS=""
 	GOOS=linux GOARCH=amd64 CGO_ENABLED=1 \
@@ -46,7 +46,7 @@ run-linux-cpu: build-linux-cpu
 
 # Linux (NVIDIA GPU) - Assumes CUDA toolkit is installed on the build machine
 .PHONY: build-linux-nvidia run-linux-nvidia
-build-linux-nvidia: ensure-go-modules ensure-llama-binding
+build-linux-nvidia:  ensure-llama-binding ensure-go-modules
 	@echo "Building for Linux (NVIDIA GPU)..."
 	@cd binding/go-llama.cpp && make libbinding.a BUILD_TYPE=cublas CGO_LDFLAGS="-lcublas -lcudart -L/usr/local/cuda/lib64"
 	GOOS=linux GOARCH=amd64 CGO_ENABLED=1 \
@@ -58,7 +58,7 @@ run-linux-nvidia: build-linux-nvidia
 
 # Linux (AMD GPU - ROCm) - Assumes ROCm toolchain is installed on the build machine
 .PHONY: build-linux-ati run-linux-ati
-build-linux-ati: ensure-go-modules ensure-llama-binding
+build-linux-ati: ensure-llama-binding ensure-go-modules 
 	@echo "Building for Linux (AMD GPU - ROCm)..."
 	@cd binding/go-llama.cpp && CC=/opt/rocm/llvm/bin/clang CXX=/opt/rocm/llvm/bin/clang++ make libbinding.a BUILD_TYPE=hipblas CGO_LDFLAGS="-O3 --hip-link --rtlib=compiler-rt -lrocblas -lhipblas -L/opt/rocm/lib"
 	GOOS=linux GOARCH=amd64 CGO_ENABLED=1 \
@@ -71,7 +71,7 @@ run-linux-ati: build-linux-ati
 
 # macOS (Apple Silicon - Metal GPU)
 .PHONY: build-macos-apple run-macos-apple
-build-macos-apple: ensure-go-modules ensure-llama-binding
+build-macos-apple: ensure-llama-binding ensure-go-modules 
 	@echo "Building for macOS (Apple Silicon - Metal GPU)..."
 	# Build go-llama.cpp's internal libbinding.a with Metal flags
 	@cd binding/go-llama.cpp && make libbinding.a BUILD_TYPE=metal CGO_LDFLAGS="-framework Foundation -framework Metal -framework MetalKit -framework MetalPerformanceShaders"
@@ -84,7 +84,7 @@ run-macos-apple: build-macos-apple
 
 # Windows (AMD64 CPU)
 .PHONY: build-windows-cpu run-windows-cpu
-build-windows-cpu: ensure-go-modules ensure-llama-binding
+build-windows-cpu: ensure-llama-binding ensure-go-modules 
 	@echo "Building for Windows (CPU)..."
 	@cd binding/go-llama.cpp && make libbinding.a BUILD_TYPE=cpu CGO_LDFLAGS=""
 	GOOS=windows GOARCH=amd64 CGO_ENABLED=1 \
@@ -95,7 +95,7 @@ run-windows-cpu: build-windows-cpu
 
 # Windows (NVIDIA GPU) - Experimental and requires specific setup on Windows
 .PHONY: build-windows-nvidia run-windows-nvidia
-build-windows-nvidia: ensure-go-modules ensure-llama-binding
+build-windows-nvidia: ensure-llama-binding ensure-go-modules 
 	@echo "Building for Windows (NVIDIA GPU) - EXPERIMENTAL. Requires MSYS2/MinGW and CUDA SDK."
 	@echo "You might need to adjust CGO_LDFLAGS to point to your CUDA installation (e.g., -L\"C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/vX.Y/lib/x64\")"
 	@echo "Also ensure go-llama.cpp's Makefile 'make libbinding.a' works with your Windows compiler."
@@ -110,7 +110,7 @@ run-windows-nvidia: build-windows-nvidia
 
 # Windows (AMD GPU - ROCm) - Highly experimental for native Windows, typically via WSL2
 .PHONY: build-windows-ati run-windows-ati
-build-windows-ati: ensure-go-modules ensure-llama-binding
+build-windows-ati: ensure-llama-binding ensure-go-modules 
 	@echo "Building for Windows (AMD GPU - ROCm) - HIGHLY EXPERIMENTAL. Best in WSL2."
 	@echo "Requires MSYS2/MinGW and ROCm SDK. You will need to set compiler (CC/CXX) paths to ROCm-enabled clang."
 	@echo "Adjust CGO_LDFLAGS for ROCm libraries and ensure go-llama.cpp's Makefile works with your Windows compiler."
