@@ -34,3 +34,4 @@ go.work.sum
 # Dynamics
 models/
 binding/
+main_macos_arm64
