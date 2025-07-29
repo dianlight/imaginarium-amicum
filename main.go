@@ -3,10 +3,8 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"embed"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"image/png"
 	"io"
@@ -182,9 +180,12 @@ func (h *Hub) Run() {
 	defer llm.Free()
 
 	// Stable Diffusion Model initialization re-added
-	options := sd.DefaultOptions() // Corrected: sd.DefaultOptions is a function
-	options.Threads = 4             // Example: Set threads for SD
-	options.SetGPULayers(gpuLayers) // Apply GPU layers option
+	options := sd.DefaultOptions    // Corrected: sd.DefaultOptions is a function
+	if gpuLayers != 0 {
+		options.GpuEnable = true             
+	} else {
+		options.GpuEnable = false            
+	}
 
 	sdm, err = sd.NewAutoModel(options)
 	if err != nil {
@@ -356,7 +357,7 @@ func (h *Hub) handleChatMessage(session *ChatSession, userMessage ChatMessage) {
 		llama.SetTopK(40),
 		llama.SetTopP(0.95),
 		llama.SetTemperature(0.7),
-		llama.SetSeed(time.Now().UnixNano()), // Use a new seed for each prediction
+		llama.SetSeed(int(time.Now().UnixNano())), // Use a new seed for each prediction
 	)
 	if err != nil {
 		log.Printf("Llama LLM prediction error: %v", err)
@@ -372,37 +373,36 @@ func (h *Hub) handleChatMessage(session *ChatSession, userMessage ChatMessage) {
 	// Add assistant's text response to history
 	session.history = append(session.history, assistantMessage)
 
-
+	log.Println("Starting image generation...")
+	imagePrompt := fmt.Sprintf("Generate a realistic image based on this description from an AI assistant, keeping the language, setting, and character context in mind. Focus on key visual elements. Description: \"%s\"", assistantResponse)
 	// 4. Generate image based on AI response (re-added)
 	log.Printf("Generating image based on AI response: %s", assistantResponse)
-	imagePrompt := fmt.Sprintf("Generate a realistic image based on this description from an AI assistant, keeping the language, setting, and character context in mind. Focus on key visual elements. Description: \"%s\"", assistantResponse)
 	// Optionally, add negative prompts or other SD parameters here
-	sdOpts := sd.DefaultOptions() // Corrected: sd.DefaultOptions is a function
+	sdOpts := sd.DefaultOptions
+	sdOpts.BatchCount = 1
 	sdOpts.Width = 512
 	sdOpts.Height = 512
-	sdOpts.SampleMethod = sd.SampleMethodEulerA
+	//sdOpts.SampleMethod = sd.SampleMethodEulerA
 	sdOpts.SampleSteps = 20
 	sdOpts.CfgScale = 7.0
 	sdOpts.ClipSkip = 1 // Common setting for SD 1.5
+	sdOpts.NegativePrompt = "ugly, deformed, disfigured, low quality, bad anatomy, bad art, blurry, out of focus"
 	sdOpts.Seed = uint32(time.Now().UnixNano()) // Use a new seed for each image
 
-	img, err := session.sdm.Predict(imagePrompt, sdOpts)
+	var imgBuf bytes.Buffer
+	var imgs []io.Writer
+	imgs = append(imgs, &imgBuf)
+	err = session.sdm.Predict(imagePrompt, sdOpts, imgs)
 	if err != nil {
 		log.Printf("Stable Diffusion image generation error: %v", err)
-		// Send a status message to the user about image generation failure
-		session.sendMessage("status", "Could not generate an image for the last response.")
+		// Set a placeholder image URL indicating an error
+		assistantMessage.Image = "https://placehold.co/400x300/e5e7eb/6b7280?text=Image+Gen+Failed"
 	} else {
-		log.Println("Image generated successfully. Encoding to PNG.")
-		var buf bytes.Buffer
-		err := png.Encode(&buf, img)
-		if err != nil {
-			log.Printf("Failed to encode PNG image: %v", err)
-		} else {
-			assistantMessage.Image = "data:image/png;base64," + base64.StdEncoding.EncodeToString(buf.Bytes())
-			// Update the last message in history with the image data
-			session.history[len(session.history)-1].Image = assistantMessage.Image
-		}
-	}
+		assistantMessage.Image = "data:image/png;base64," + base64.StdEncoding.EncodeToString(imgBuf.Bytes())
+		log.Println("Image generated and base64 encoded successfully.")
+	} 
+
+	session.history[len(session.history)-1].Image = assistantMessage.Image
 
 	session.sendChatUpdate() // Send final updated history to client
 }
