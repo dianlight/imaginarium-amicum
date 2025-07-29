@@ -272,6 +272,7 @@ jobs:
   # --- Windows CPU Build ---
   build-windows-cpu:
     name: Build Windows (CPU)
+    if: false
     runs-on: windows-latest
     needs: get-release-version # Depends on the version determination and existence check
     steps:
@@ -439,7 +440,7 @@ jobs:
       #- build-linux-nvidia
       #- build-linux-ati
       - build-macos-apple
-      - build-windows-cpu
+      #- build-windows-cpu
       #- build-windows-nvidia
       #- build-windows-ati
     if: success() # Only run this job if ALL preceding jobs passed
