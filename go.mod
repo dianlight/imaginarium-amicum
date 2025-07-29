@@ -12,3 +12,5 @@ require (
 	github.com/ebitengine/purego v0.6.0-alpha.3.0.20240117154336-babd452e909b // indirect
 	golang.org/x/sys v0.16.0 // indirect
 )
+
+replace github.com/go-skynet/go-llama.cpp => ./binding/go-llama.cpp
