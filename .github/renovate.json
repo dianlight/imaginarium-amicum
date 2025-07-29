@@ -2,42 +2,60 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "autodiscover": true,
   "extends": [
-    "config:base"
+    "config:recommended"
   ],
-  "labels": ["dependencies", "renovate"],
+  "labels": [
+    "dependencies",
+    "renovate"
+  ],
   "prConcurrentLimit": 10,
   "prHourlyLimit": 2,
-  "schedule": ["at any time"],
+  "schedule": [
+    "at any time"
+  ],
   "timezone": "Europe/Rome",
   "platform": "github",
   "packageRules": [
     {
-      "matchDepTypes": ["dependencies"],
-      "matchUpdateTypes": ["patch", "minor"],
+      "matchDepTypes": [
+        "dependencies"
+      ],
+      "matchUpdateTypes": [
+        "patch",
+        "minor"
+      ],
       "automerge": true,
-      "automergeType": "branch-push"
+      "automergeType": "branch"
     },
     {
-      "matchPackagePrefixes": ["go-llama.cpp"],
       "groupName": "go-llama.cpp updates",
       "automerge": false,
-      "description": "Updates for go-llama.cpp binding. These often require manual checks due to CGO."
+      "description": "Updates for go-llama.cpp binding. These often require manual checks due to CGO.",
+      "matchPackageNames": [
+        "go-llama.cpp{/,}**"
+      ]
     },
     {
-      "matchPackagePrefixes": ["github.com/seasonjs/stable-diffusion"],
       "groupName": "stable-diffusion updates",
       "automerge": false,
-      "description": "Updates for stable-diffusion binding. These often require manual checks due to CGO."
+      "description": "Updates for stable-diffusion binding. These often require manual checks due to CGO.",
+      "matchPackageNames": [
+        "github.com/seasonjs/stable-diffusion{/,}**"
+      ]
     },
     {
-      "matchPackagePrefixes": ["github.com/actions/"],
       "groupName": "github-actions updates",
-      "automerge": true
+      "automerge": true,
+      "matchPackageNames": [
+        "github.com/actions/{/,}**"
+      ]
     },
     {
-      "matchPackagePrefixes": ["golang.org/"],
       "groupName": "standard-library updates",
-      "automerge": true
+      "automerge": true,
+      "matchPackageNames": [
+        "golang.org/{/,}**"
+      ]
     }
   ],
   "ignorePaths": [
