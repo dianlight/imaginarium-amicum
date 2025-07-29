@@ -386,7 +386,7 @@ func (h *Hub) handleChatMessage(session *ChatSession, userMessage ChatMessage) {
 	//SampleSteps:      20,
 	//Strength:         0.4,
 	//Seed:             42,
-	sdOpts.Seed = uint32(time.Now().UnixNano()) // Use a new seed for each image
+	sdOpts.Seed = time.Now().UnixNano() // Use a new seed for each image
 	//BatchCount:       1,
 	//OutputsImageType: PNG,
 
