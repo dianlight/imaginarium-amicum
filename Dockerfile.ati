@@ -70,18 +70,6 @@ COPY --from=builder /app/web web/
 COPY --from=builder /app/binding/go-llama.cpp/libbinding.a /app/libbinding_llama.a
 COPY --from=builder /app/binding/go-sd.cpp/libbinding.a /app/libbinding_sd.a
 
-# Set environment variables for the runtime. LD_LIBRARY_PATH is crucial for ROCm libraries.
-ENV LIBRARY_PATH=/app:/opt/rocm/lib
-ENV LD_LIBRARY_PATH=/app:/opt/rocm/lib
-
-# Create a directory to store the AI models
-RUN mkdir -p models
-
-# Copy the downloaded models from the host into the container.
-# The `pull-models` Makefile target ensures these are present on the host.
-COPY ./models/llama-2-7b-chat.Q4_K_M.gguf $(MODELS_DIR)/
-COPY ./models/v1-5-pruned-emaonly.safetensors $(MODELS_DIR)/
-
 # Expose the port where the Go application will listen
 EXPOSE 8080
 

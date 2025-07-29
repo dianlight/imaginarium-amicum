@@ -1,184 +1,366 @@
-<!-- web/index.html -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Go Llama & Stable Diffusion Chat</title>
-    <script src="https://cdn.tailwindcss.com"></script>
+    <title>AI Chat with Image Generation</title>
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
         body {
-            font-family: 'Inter', sans-serif;
-            -webkit-font-smoothing: antialiased;
-            -moz-osx-font-smoothing: grayscale;
-            background-color: #f3f4f6;
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            background-color: #f4f4f4;
+            color: #333;
         }
-        /* Custom scrollbar for chat container */
-        .chat-container::-webkit-scrollbar {
-            width: 8px;
+        header {
+            background-color: #007bff;
+            color: white;
+            padding: 15px 20px;
+            text-align: center;
+            font-size: 1.5em;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         }
-        .chat-container::-webkit-scrollbar-track {
-            background: #e0e0e0;
-            border-radius: 10px;
+        .chat-container {
+            flex-grow: 1;
+            display: flex;
+            flex-direction: column;
+            max-width: 900px;
+            margin: 20px auto;
+            background-color: white;
+            border-radius: 8px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+            overflow: hidden;
         }
-        .chat-container::-webkit-scrollbar-thumb {
-            background: #888;
-            border-radius: 10px;
+        .messages {
+            flex-grow: 1;
+            padding: 20px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            background-color: #e9ebee;
         }
-        .chat-container::-webkit-scrollbar-thumb:hover {
-            background: #555;
+        .message {
+            display: flex;
+            align-items: flex-start;
+            word-break: break-word;
+        }
+        .message.user {
+            justify-content: flex-end;
+        }
+        .message.assistant {
+            justify-content: flex-start;
+        }
+        .message-content {
+            max-width: 70%;
+            padding: 12px 18px;
+            border-radius: 20px;
+            line-height: 1.5;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+        }
+        .message.user .message-content {
+            background-color: #007bff;
+            color: white;
+            border-bottom-right-radius: 2px;
+        }
+        .message.assistant .message-content {
+            background-color: #f0f0f0;
+            color: #333;
+            border-bottom-left-radius: 2px;
+        }
+        .message img {
+            max-width: 100%;
+            height: auto;
+            border-radius: 8px;
+            margin-top: 10px;
+            display: block; /* Ensures image is on its own line */
+        }
+        .input-area {
+            display: flex;
+            padding: 20px;
+            border-top: 1px solid #ddd;
+            background-color: #f9f9f9;
+        }
+        #chat-input {
+            flex-grow: 1;
+            padding: 12px 15px;
+            border: 1px solid #ccc;
+            border-radius: 25px;
+            font-size: 1em;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+        #chat-input:focus {
+            border-color: #007bff;
+        }
+        #send-button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 25px;
+            padding: 12px 25px;
+            margin-left: 10px;
+            cursor: pointer;
+            font-size: 1em;
+            transition: background-color 0.2s;
+            outline: none;
+        }
+        #send-button:hover {
+            background-color: #0056b3;
+        }
+        #send-button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        .new-chat-button {
+            background-color: #6c757d;
+            color: white;
+            border: none;
+            border-radius: 25px;
+            padding: 10px 20px;
+            margin-top: 10px;
+            cursor: pointer;
+            font-size: 0.9em;
+            transition: background-color 0.2s;
+            align-self: flex-end; /* Align to the right within the chat-container */
+            margin-right: 20px;
+        }
+        .new-chat-button:hover {
+            background-color: #5a6268;
+        }
+
+        /* Download Status Styles */
+        #download-status {
+            display: flex; /* Initially hidden, will be shown by JS */
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+            background-color: #e0f7fa; /* Light blue background */
+            border-bottom: 1px solid #b2ebf2;
+            color: #00796b;
+            font-size: 1.1em;
+            text-align: center;
+            gap: 10px;
+        }
+        .progress-bar-container {
+            width: 80%;
+            background-color: #e0e0e0;
+            border-radius: 5px;
+            overflow: hidden;
+            margin-right: 10px;
+            height: 25px; /* Fixed height for bars */
+            display: flex;
+            align-items: center;
+        }
+        .progress-bar {
+            height: 100%;
+            width: 0%;
+            text-align: center;
+            line-height: 25px; /* Vertically center text */
+            color: white;
+            transition: width 0.3s ease-in-out;
+            border-radius: 5px;
+            font-size: 0.9em;
+        }
+        #llama-progress-bar { background-color: #4CAF50; } /* Green */
+        #sd-progress-bar { background-color: #2196F3; } /* Blue */
+        .progress-row {
+            display: flex;
+            align-items: center;
+            width: 100%;
+            justify-content: center;
+        }
+        .progress-text {
+            min-width: 120px; /* Ensure space for text */
+            text-align: left;
+        }
+        .model-name {
+            font-weight: bold;
+            margin-right: 10px;
+            min-width: 100px;
+            text-align: right;
         }
     </style>
 </head>
-<body class="bg-gray-100 min-h-screen flex flex-col items-center justify-center p-4">
-    <div class="w-full max-w-7xl bg-white rounded-lg shadow-xl flex flex-col md:flex-row h-[90vh] overflow-hidden">
-        <!-- Image Panel (Top on mobile, Right on desktop) -->
-        <div id="image-panel" class="md:w-1/2 flex items-center justify-center bg-gray-50 p-4 border-b md:border-b-0 md:border-l border-gray-200 order-first md:order-last">
-            <div class="text-center text-gray-500">
-                <p class="text-lg mb-2">Generated Image</p>
-                <!-- Initial placeholder image -->
-                <img id="generated-image" src="https://placehold.co/400x300/e5e7eb/6b7280?text=AI+Generated+Image" alt="Generated Image" class="max-w-full h-auto rounded-lg shadow-md border border-gray-300">
-                <!-- Displays the prompt used for image generation -->
-                <p id="image-prompt-display" class="mt-4 text-sm text-gray-600 break-words max-h-32 overflow-y-auto custom-scrollbar p-2 bg-gray-100 rounded-md"></p>
+<body>
+    <header>
+        AI Chat with Image Generation
+    </header>
+
+    <div id="download-status" style="display: flex;">
+        <p id="download-message">Connecting to server, checking models...</p>
+        <div class="progress-row">
+            <span class="model-name">Llama:</span>
+            <div class="progress-bar-container">
+                <div id="llama-progress-bar" class="progress-bar">0%</div>
             </div>
+            <span id="llama-progress-text" class="progress-text">0 Bytes / 0 Bytes</span>
         </div>
-
-        <!-- Chat Panel (Bottom on mobile, Left on desktop) -->
-        <div class="md:w-1/2 flex flex-col h-full bg-white p-4">
-            <div class="flex-grow overflow-y-auto chat-container p-2 space-y-4">
-                <div id="messages" class="flex flex-col space-y-4">
-                    <!-- Initial welcome message -->
-                    <div class="flex justify-start">
-                        <div class="bg-blue-500 text-white p-3 rounded-xl rounded-bl-none shadow-md max-w-[80%]">
-                            Welcome! Ask me anything.
-                        </div>
-                    </div>
-                </div>
+        <div class="progress-row">
+            <span class="model-name">Stable Diffusion:</span>
+            <div class="progress-bar-container">
+                <div id="sd-progress-bar" class="progress-bar">0%</div>
             </div>
+            <span id="sd-progress-text" class="progress-text">0 Bytes / 0 Bytes</span>
+        </div>
+    </div>
 
-            <div class="mt-4 flex items-center space-x-2">
-                <button id="newChatButton" class="bg-red-500 hover:bg-red-600 text-white font-semibold py-2 px-4 rounded-full shadow-md transition duration-200 ease-in-out transform hover:scale-105">
-                    New Chat
-                </button>
-                <input type="text" id="messageInput" class="flex-grow border border-gray-300 rounded-full px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Type your message...">
-                <button id="sendButton" class="bg-blue-500 hover:bg-blue-600 text-white font-semibold py-2 px-4 rounded-full shadow-md transition duration-200 ease-in-out transform hover:scale-105">
-                    Send
-                </button>
+    <div class="chat-container">
+        <div class="messages" id="messages">
             </div>
+        <button id="new-chat-button" class="new-chat-button">Start New Chat</button>
+        <div class="input-area">
+            <input type="text" id="chat-input" placeholder="Type your message..." disabled>
+            <button id="send-button" disabled>Send</button>
         </div>
     </div>
 
     <script>
-        const messageInput = document.getElementById('messageInput');
-        const sendButton = document.getElementById('sendButton');
-        const newChatButton = document.getElementById('newChatButton');
+        const chatInput = document.getElementById('chat-input');
+        const sendButton = document.getElementById('send-button');
         const messagesDiv = document.getElementById('messages');
-        const generatedImage = document.getElementById('generated-image');
-        const imagePromptDisplay = document.getElementById('image-prompt-display');
+        const newChatButton = document.getElementById('new-chat-button');
+        const downloadStatusDiv = document.getElementById('download-status');
+        const downloadMessage = document.getElementById('download-message');
+        const llamaProgressBar = document.getElementById('llama-progress-bar');
+        const llamaProgressText = document.getElementById('llama-progress-text');
+        const sdProgressBar = document.getElementById('sd-progress-bar');
+        const sdProgressText = document.getElementById('sd-progress-text');
 
         let ws;
 
-        // Function to establish WebSocket connection
         function connectWebSocket() {
             ws = new WebSocket('ws://' + window.location.host + '/ws');
 
-            ws.onopen = () => {
-                console.log('Connected to WebSocket');
+            ws.onopen = function() {
+                console.log('WebSocket connected.');
+                // Server will send initial status after connection
             };
 
-            // Handle incoming messages from the WebSocket server
-            ws.onmessage = (event) => {
-                const data = JSON.parse(event.data);
-                if (data.type === 'chatUpdate') {
-                    // Update chat history and potentially the image
-                    renderChatHistory(data.history);
-                } else if (data.type === 'status') {
-                    // Display status messages (e.g., "New chat started!")
-                    const statusMessageDiv = document.createElement('div');
-                    statusMessageDiv.className = 'flex justify-center text-sm text-gray-500 italic';
-                    statusMessageDiv.textContent = data.content;
-                    messagesDiv.appendChild(statusMessageDiv);
-                    messagesDiv.scrollTop = messagesDiv.scrollHeight; // Scroll to bottom
+            ws.onmessage = function(event) {
+                const message = JSON.parse(event.data);
+                console.log('Received:', message);
+
+                if (message.type === 'chatUpdate') {
+                    renderMessages(message.history);
+                } else if (message.type === 'initialPrompt' || message.type === 'status') {
+                    // For initial setup messages or general status updates
+                    appendMessage({ role: 'assistant', content: message.content }, 'status');
+                    if (message.type === 'initialPrompt') {
+                        chatInput.disabled = false;
+                        sendButton.disabled = false;
+                        chatInput.focus();
+                    }
+                } else if (message.type === 'downloadProgress') {
+                    downloadStatusDiv.style.display = 'flex';
+                    downloadMessage.innerText = message.Message;
+
+                    if (message.llamaProgress) {
+                        const lp = message.llamaProgress;
+                        llamaProgressBar.style.width = lp.percent.toFixed(1) + '%';
+                        llamaProgressBar.innerText = lp.percent.toFixed(1) + '%';
+                        llamaProgressText.innerText = `${formatBytes(lp.downloadedBytes)} / ${formatBytes(lp.totalBytes)}`;
+                    }
+                    if (message.sdProgress) {
+                        const sp = message.sdProgress;
+                        sdProgressBar.style.width = sp.percent.toFixed(1) + '%';
+                        sdProgressBar.innerText = sp.percent.toFixed(1) + '%';
+                        sdProgressText.innerText = `${formatBytes(sp.downloadedBytes)} / ${formatBytes(sp.totalBytes)}`;
+                    }
+
+                } else if (message.type === 'serverReady') {
+                    downloadStatusDiv.style.display = 'none'; // Hide download status
+                    // Enable chat input and send initial prompt
+                    chatInput.disabled = false;
+                    sendButton.disabled = false;
+                    chatInput.focus();
+                    // The server sends the initialPrompt message separately when it registers the session
+                } else if (message.type === 'downloadError') {
+                    downloadStatusDiv.style.display = 'flex'; // Keep showing error
+                    downloadMessage.innerText = `Error: ${message.Message}. Please check server logs.`;
+                    llamaProgressBar.style.width = '100%';
+                    llamaProgressBar.style.backgroundColor = '#dc3545'; // Red for error
+                    sdProgressBar.style.width = '100%';
+                    sdProgressBar.style.backgroundColor = '#dc3545'; // Red for error
+                    chatInput.disabled = true;
+                    sendButton.disabled = true;
                 }
             };
 
-            // Attempt to reconnect on WebSocket close
-            ws.onclose = () => {
-                console.log('Disconnected from WebSocket. Attempting to reconnect...');
-                setTimeout(connectWebSocket, 3000); // Reconnect after 3 seconds
+            ws.onclose = function() {
+                console.log('WebSocket disconnected. Attempting to reconnect in 5 seconds...');
+                chatInput.disabled = true;
+                sendButton.disabled = true;
+                setTimeout(connectWebSocket, 5000);
             };
 
-            // Log WebSocket errors
-            ws.onerror = (err) => {
+            ws.onerror = function(err) {
                 console.error('WebSocket error:', err);
-                ws.close(); // Close to trigger reconnect
+                ws.close();
             };
         }
 
-        // Function to send a message via WebSocket
         function sendMessage() {
-            const content = messageInput.value.trim();
+            const content = chatInput.value.trim();
             if (content) {
-                const message = { role: 'user', content: content };
-                ws.send(JSON.stringify(message));
-                messageInput.value = ''; // Clear input field
+                ws.send(JSON.stringify({ role: 'user', content: content }));
+                chatInput.value = '';
             }
         }
 
-        // Renders the chat history and updates the image panel
-        function renderChatHistory(history) {
-            messagesDiv.innerHTML = ''; // Clear existing messages before re-rendering
+        function renderMessages(history) {
+            messagesDiv.innerHTML = ''; // Clear existing messages
             history.forEach(msg => {
-                const messageBubble = document.createElement('div');
-                
-                if (msg.role === 'user') {
-                    messageBubble.className = 'flex justify-end';
-                    messageBubble.innerHTML = `
-                        <div class="bg-blue-500 text-white p-3 rounded-xl rounded-br-none shadow-md max-w-[80%]">
-                            ${msg.content}
-                        </div>
-                    `;
-                } else { // assistant
-                    messageBubble.className = 'flex justify-start';
-                    messageBubble.innerHTML = `
-                        <div class="bg-gray-200 text-gray-800 p-3 rounded-xl rounded-bl-none shadow-md max-w-[80%]">
-                            ${msg.content}
-                        </div>
-                    `;
-                    // If the assistant message includes an image, update the image panel
-                    if (msg.image) {
-                        generatedImage.src = msg.image;
-                        // For placeholder images, extract the 'text' part from the URL for display
-                        if (msg.image.startsWith('https://placehold.co/')) {
-                            const urlParams = new URLSearchParams(msg.image.split('?')[1]);
-                            const textParam = urlParams.get('text');
-                            imagePromptDisplay.textContent = textParam ? decodeURIComponent(textParam) : 'Image generated.';
-                        } else {
-                            // For actual base64 images, display a generic message
-                            imagePromptDisplay.textContent = 'Image generated from response.';
-                        }
-                    }
-                }
-                messagesDiv.appendChild(messageBubble);
+                appendMessage(msg, msg.role);
             });
-            messagesDiv.scrollTop = messagesDiv.scrollHeight; // Scroll to the latest message
+            messagesDiv.scrollTop = messagesDiv.scrollHeight; // Scroll to bottom
         }
 
-        // Event listeners for sending messages and starting a new chat
+        function appendMessage(msg, role) {
+            const messageElement = document.createElement('div');
+            messageElement.classList.add('message', role);
+
+            const contentElement = document.createElement('div');
+            contentElement.classList.add('message-content');
+            contentElement.innerHTML = marked.parse(msg.content); // Use marked.js for Markdown
+
+            messageElement.appendChild(contentElement);
+
+            if (msg.image) {
+                const imgElement = document.createElement('img');
+                imgElement.src = msg.image;
+                imgElement.alt = 'Generated Image';
+                contentElement.appendChild(imgElement);
+            }
+            messagesDiv.appendChild(messageElement);
+        }
+
+        // Helper to format bytes for display
+        function formatBytes(bytes, decimals = 2) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const dm = decimals < 0 ? 0 : decimals;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+        }
+
         sendButton.addEventListener('click', sendMessage);
-        messageInput.addEventListener('keypress', (e) => {
+        chatInput.addEventListener('keypress', function(e) {
             if (e.key === 'Enter') {
                 sendMessage();
             }
         });
-
-        newChatButton.addEventListener('click', () => {
-            ws.send(JSON.stringify({ content: '/newchat' })); // Send special command to start new chat
+        newChatButton.addEventListener('click', function() {
+            ws.send(JSON.stringify({ role: 'command', content: '/newchat' }));
         });
 
         // Initialize WebSocket connection when the page loads
         connectWebSocket();
     </script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </body>
 </html>

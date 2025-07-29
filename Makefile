@@ -1,20 +1,19 @@
 # Makefile for Go AI Chat Application
 
 # Project and Docker Variables
-APP_NAME := go-ai-chat
+APP_NAME := imaginarium-amicum
 GO_BIN := main
 WEB_DIR := web
-MODELS_DIR := models
 
 # Go build flags for setting gpuLayersStr in main.go
 LD_FLAGS_CPU := -ldflags="-X main.gpuLayersStr=0"
 LD_FLAGS_NVIDIA := -ldflags="-X main.gpuLayersStr=-1" # -1 often means all layers
 LD_FLAGS_ATI := -ldflags="-X main.gpuLayersStr=-1"    # -1 often means all layers
-LD_FLAGS_APPLE := -ldflags="-extldflags '-framework Foundation -framework Metal -framework MetalKit -framework MetalPerformanceShaders'  -X main.gpuLayersStr=-1"  # -1 for Metal offloading
+LD_FLAGS_APPLE := -ldflags="-X main.gpuLayersStr=-1"  # -1 for Metal offloading
 
 # --- Build Targets ---
 
-.PHONY: all build clean docker-build-cpu docker-build-nvidia docker-build-ati run-cpu run-nvidia run-ati pull-models build-apple run-apple build-bindings-for-docker
+.PHONY: all build clean docker-build-cpu docker-build-nvidia docker-build-ati run-cpu run-nvidia run-ati build-apple run-apple build-bindings-for-docker
 
 all: build docker-build-cpu
 
@@ -26,36 +25,20 @@ build:
 	@echo "Local build complete: ./"$(GO_BIN)
 
 # Build the Go application locally for Apple Silicon (Metal acceleration)
-build-apple: pull-models
+build-apple:
 	@echo "Building Go application locally for Apple Silicon (Metal acceleration)..."
 	@go mod tidy
 	@echo "Building go-llama.cpp with Metal support..."
 	@if [ ! -d "binding/go-llama.cpp" ]; then git clone --recurse-submodules https://github.com/go-skynet/go-llama.cpp.git binding/go-llama.cpp; fi
-	@cd binding/go-llama.cpp && BUILD_TYPE=metal make libbinding.a
+	@cd binding/go-llama.cpp && BUILD_TYPE=metal make libbinding.a CGO_LDFLAGS="-framework Foundation -framework Metal -framework MetalKit -framework MetalPerformanceShaders"
 	@echo "Building main Go application with Metal bindings..."
-	@CGO_LDFLAGS="-framework Foundation -framework Metal -framework MetalKit -framework MetalPerformanceShaders" \
-	C_INCLUDE_PATH="./binding/go-llama.cpp" \
-	LIBRARY_PATH="./binding/go-llama.cpp" \
+	# Correct C_INCLUDE_PATH to include common headers from submodules
+	# LDFLAGS links the compiled static libraries (.a) and required Metal frameworks.
+	# C_INCLUDE_PATH points to directories containing necessary headers, including those from submodules.
+	@CGO_LDFLAGS="-L$(PWD)/binding/go-llama.cpp -framework Foundation -framework Metal -framework MetalKit -framework MetalPerformanceShaders" \
+	C_INCLUDE_PATH="$(PWD)/binding/go-llama.cpp:$(PWD)/binding/go-llama.cpp/llama.cpp/common" \
 	CGO_ENABLED=1 go build $(LD_FLAGS_APPLE) -o $(GO_BIN) .
 	@echo "Apple Silicon local build complete: ./"$(GO_BIN)
-
-# Pulls required AI models
-pull-models:
-	@echo "Checking and pulling AI models..."
-	@mkdir -p $(MODELS_DIR)
-	@if [ ! -f "$(MODELS_DIR)/llama-2-7b-chat.Q4_K_M.gguf" ]; then \
-		echo "Downloading Llama 2 7B Chat GGUF model..."; \
-		wget -O "$(MODELS_DIR)/llama-2-7b-chat.Q4_K_M.gguf" https://huggingface.co/TheBloke/Llama-2-7B-Chat-GGUF/resolve/main/llama-2-7b-chat.Q4_K_M.gguf; \
-	else \
-		echo "Llama 2 model already exists."; \
-	fi
-	@if [ ! -f "$(MODELS_DIR)/v1-5-pruned-emaonly.safetensors" ]; then \
-		echo "Downloading Stable Diffusion v1.5 model..."; \
-		wget -O "$(MODELS_DIR)/v1-5-pruned-emaonly.safetensors" https://huggingface.co/runwayml/stable-diffusion-v1-5/resolve/main/v1-5-pruned-emaonly.safetensors; \
-	else \
-		echo "Stable Diffusion model already exists."; \
-	fi
-	@echo "Model download/check complete."
 
 # Target to build bindings specifically for Docker stages
 # This target should be invoked from within a Dockerfile RUN command.
@@ -65,28 +48,25 @@ build-bindings-for-docker:
 	@echo "Building go-llama.cpp bindings with BUILD_TYPE=$(BUILD_TYPE)..."
 	@if [ ! -d "binding/go-llama.cpp" ]; then git clone --recurse-submodules https://github.com/go-skynet/go-llama.cpp.git binding/go-llama.cpp; fi
 	@cd binding/go-llama.cpp && BUILD_TYPE="$(BUILD_TYPE)" make libbinding.a CGO_LDFLAGS="$(CGO_LDFLAGS)"
-	@echo "Building go-sd.cpp bindings with BUILD_TYPE=$(BUILD_TYPE)..."
-	@if [ ! -d "binding/go-sd.cpp" ]; then git clone --recurse-submodules https://github.com/go-skynet/go-sd.cpp.git binding/go-sd.cpp; fi
-	@cd binding/go-sd.cpp && BUILD_TYPE="$(BUILD_TYPE)" make libbinding.a CGO_LDFLAGS="$(CGO_LDFLAGS)"
 
 # --- Docker Build Targets ---
 
 # Build Docker image for CPU (AMD64 / ARM64 compatible)
-docker-build-cpu: pull-models
+docker-build-cpu:
 	@echo "Building Docker image for CPU (AMD64 / ARM64 compatible)..."
 	@docker build --build-arg GPU_LAYERS=0 -f Dockerfile.cpu -t $(APP_NAME):cpu .
 	@echo "Docker image $(APP_NAME):cpu built successfully."
 
 # Build Docker image for Nvidia GPU (requires CUDA toolkit on host for building, NVIDIA Container Toolkit for running)
 # This will use an Nvidia CUDA base image.
-docker-build-nvidia: pull-models
+docker-build-nvidia:
 	@echo "Building Docker image for Nvidia GPU..."
 	@docker build --build-arg GPU_LAYERS=-1 -f Dockerfile.nvidia -t $(APP_NAME):nvidia .
 	@echo "Docker image $(APP_NAME):nvidia built successfully."
 
 # Build Docker image for AMD GPU (requires ROCm on host for building, AMD ROCm support for Docker for running)
 # This will use an AMD ROCm base image.
-docker-build-ati: pull-models
+docker-build-ati:
 	@echo "Building Docker image for AMD GPU (ROCm)..."
 	@docker build --build-arg GPU_LAYERS=-1 -f Dockerfile.ati -t $(APP_NAME):ati .
 	@echo "Docker image $(APP_NAME):ati built successfully."
@@ -121,7 +101,6 @@ run-apple: build-apple
 clean:
 	@echo "Cleaning up..."
 	@rm -f $(GO_BIN)
-	@rm -rf $(MODELS_DIR) # Also remove downloaded models
 	@rm -rf binding/go-llama.cpp binding/go-sd.cpp # Remove cloned binding repos
 	@docker rmi $(APP_NAME):cpu $(APP_NAME):nvidia $(APP_NAME):ati 2>/dev/null || true
 	@echo "Cleanup complete."

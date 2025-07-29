@@ -3,45 +3,50 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"embed"
 	"encoding/base64"
-	"fmt" // For encoding the generated image
+	"encoding/json"
+	"fmt"
+	"image/png"
 	"io"
 	"log"
 	"net/http"
-	"strconv" // Added for string to int conversion
+	"os"
+	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
-	"github.com/go-skynet/go-llama.cpp"       // go-llama.cpp for LLM inference
-	"github.com/gorilla/websocket"            // For WebSocket communication
-	sd "github.com/seasonjs/stable-diffusion" // go-sd.cpp for Stable Diffusion image generation
+	"github.com/go-skynet/go-llama.cpp"
+	sd "github.com/seasonjs/stable-diffusion"
+	"github.com/gorilla/websocket"
 )
 
 //go:embed web/*
 var staticFiles embed.FS
 
 const (
-	// Message context history limit before summarization.
-	// Can be configured at start time.
 	defaultMessageContextLimit = 29
-	// Max tokens for LLM prediction (for chat responses).
-	maxTokens = 256
-	// LLM model path inside the container for chat and image prompt generation.
-	llamaModelPath = "/app/models/llama-2-7b-chat.Q4_K_M.gguf"
-	// Stable Diffusion model path inside the container.
-	sdModelPath = "/app/models/v1-5-pruned-emaonly.safetensors"
+	maxTokens                  = 256
+)
+
+// These paths will now be determined at runtime based on the OS.
+var llamaModelPath string
+var sdModelPath string
+
+// Model URLs for download
+const (
+	llamaModelURL = "https://huggingface.co/TheBloke/Llama-2-7B-Chat-GGUF/resolve/main/llama-2-7b-chat.Q4_K_M.gguf"
+	sdModelURL    = "https://huggingface.co/runwayml/stable-diffusion-v1-5/resolve/main/v1-5-pruned-emaonly.safetensors"
 )
 
 // gpuLayersStr will be set at build time using ldflags
 var gpuLayersStr string
 
-// WebSocket upgrader configuration
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
-	// Allowing all origins for simplicity in this example.
-	// In a production environment, you should restrict this.
 	CheckOrigin: func(r *http.Request) bool {
 		return true
 	},
@@ -49,17 +54,17 @@ var upgrader = websocket.Upgrader{
 
 // ChatMessage represents a single message in the chat.
 type ChatMessage struct {
-	Role    string `json:"role"`            // "user" or "assistant"
-	Content string `json:"content"`         // The message text
-	Image   string `json:"image,omitempty"` // Base64 encoded image data (e.g., "data:image/png;base64,...")
+	Role    string `json:"role"`
+	Content string `json:"content"`
+	Image   string `json:"image,omitempty"`
 }
 
 // Chat stages for guiding the user through initial setup.
 const (
-	StageLanguage  = iota // 0: Awaiting user's preferred language
-	StageSetting          // 1: Awaiting user's preferred setting
-	StageCharacter        // 2: Awaiting user's main character characteristics
-	StageChatting         // 3: Normal chat mode
+	StageLanguage = iota
+	StageSetting
+	StageCharacter
+	StageChatting
 )
 
 // ChatSession holds the context for a single user's chat.
@@ -67,38 +72,61 @@ type ChatSession struct {
 	mu           sync.Mutex
 	conn         *websocket.Conn
 	history      []ChatMessage
-	llm          *llama.LLama // Shared LLM instance for chat and prompt generation
-	sdm          *sd.Model    // Shared Stable Diffusion instance for image generation
-	messageLimit int          // Configurable limit for chat history
+	llm          *llama.LLama
+	sdm          *sd.Model
+	messageLimit int
 
-	// New fields for initial fixed context
-	chatStage  int // Current stage of the chat setup
+	chatStage  int
 	language   string
 	setting    string
 	characters string
 }
 
-// Hub maintains the set of active connections and broadcasts messages to the clients.
-type Hub struct {
-	sessions    map[*websocket.Conn]*ChatSession
-	register    chan *websocket.Conn
-	unregister  chan *websocket.Conn
-	messageChan chan *MessageRequest // Channel for incoming messages
+// DownloadProgress represents the progress of a single model download.
+type DownloadProgress struct {
+	ModelName    string  `json:"modelName"`
+	Downloaded   int64   `json:"downloadedBytes"`
+	Total        int64   `json:"totalBytes"`
+	Percent      float64 `json:"percent"`
+	Completed    bool    `json:"completed"`
+	ErrorMessage string  `json:"errorMessage,omitempty"`
 }
 
-// MessageRequest holds the incoming chat message and the session it belongs to.
-type MessageRequest struct {
-	Session *ChatSession
-	Message ChatMessage
+// ServerStatus represents the overall status of the server for clients.
+type ServerStatus struct {
+	Type          string           `json:"type"` // "downloadProgress" or "serverReady"
+	Message       string           `json:"message"`
+	LlamaProgress DownloadProgress `json:"llamaProgress"`
+	SDProgress    DownloadProgress `json:"sdProgress"`
+	IsReady       bool             `json:"isReady"`
+}
+
+// Global download status and mutex to protect it
+var (
+	llamaDownloadStatus   DownloadProgress
+	sdDownloadStatus      DownloadProgress
+	downloadStatusMutex   sync.Mutex
+	serverIsReady         bool // True once all models are downloaded/initialized
+	initialDownloadError  error
+)
+
+// Hub maintains the set of active connections and broadcasts messages to the clients.
+type Hub struct {
+	sessions       map[*websocket.Conn]*ChatSession
+	register       chan *websocket.Conn
+	unregister     chan *websocket.Conn
+	messageChan    chan *MessageRequest // Channel for incoming messages
+	statusUpdateChan chan ServerStatus // Channel for server-wide status updates
 }
 
 // NewHub creates and returns a new Hub instance.
 func NewHub() *Hub {
 	return &Hub{
-		sessions:    make(map[*websocket.Conn]*ChatSession),
-		register:    make(chan *websocket.Conn),
-		unregister:  make(chan *websocket.Conn),
-		messageChan: make(chan *MessageRequest),
+		sessions:       make(map[*websocket.Conn]*ChatSession),
+		register:       make(chan *websocket.Conn),
+		unregister:     make(chan *websocket.Conn),
+		messageChan:    make(chan *MessageRequest),
+		statusUpdateChan: make(chan ServerStatus),
 	}
 }
 
@@ -120,10 +148,25 @@ func (h *Hub) Run() {
 	}
 	log.Printf("Initializing models with GPU layers: %d", gpuLayers)
 
-	// Initialize LLM for chat and image prompt generation
+	// Wait until models are downloaded or an error occurs
+	for {
+		downloadStatusMutex.Lock()
+		ready := serverIsReady
+		dlErr := initialDownloadError
+		downloadStatusMutex.Unlock()
+
+		if dlErr != nil {
+			log.Fatalf("Failed to initialize Hub due to model download error: %v", dlErr)
+		}
+		if ready {
+			break
+		}
+		time.Sleep(500 * time.Millisecond) // Wait for downloads to complete
+	}
+
 	llm, err := llama.New(llamaModelPath, llama.SetContext(defaultMessageContextLimit*2), llama.SetGPULayers(gpuLayers))
 	if err != nil {
-		log.Fatalf("Error initializing Llama LLM: %v", err)
+		log.Fatalf("Error initializing Llama LLM from %s: %v", llamaModelPath, err)
 	}
 	defer llm.Free()
 
@@ -131,7 +174,7 @@ func (h *Hub) Run() {
 	options := sd.DefaultOptions //  sd.SetGPULayers(gpuLayers)
 	sdm, err := sd.NewAutoModel(options)
 	if err != nil {
-		log.Fatalf("Error initializing Stable Diffusion model: %v", err)
+		log.Fatalf("Error initializing Stable Diffusion model from %s: %v", sdModelPath, err)
 	}
 	defer sdm.Close()
 
@@ -162,8 +205,28 @@ func (h *Hub) Run() {
 			}
 			h.sessions[conn] = session
 			log.Printf("Client connected: %s", conn.RemoteAddr())
-			// Send the first prompt to the user
-			session.sendMessage("initialPrompt", "Hello! What language would you like to use for our chat?")
+
+			// Send current server status (including download progress or ready state)
+			downloadStatusMutex.Lock()
+			currentStatus := ServerStatus{
+				Type:          "serverReady", // Assume ready if we got here
+				Message:       "Server is ready! You can start chatting.",
+				LlamaProgress: llamaDownloadStatus,
+				SDProgress:    sdDownloadStatus,
+				IsReady:       serverIsReady,
+			}
+			if !serverIsReady { // If somehow a client connects before ready (shouldn't happen with current blocking logic)
+				currentStatus.Type = "downloadProgress"
+				currentStatus.Message = "Server is still downloading models."
+			}
+			downloadStatusMutex.Unlock()
+			conn.WriteJSON(currentStatus)
+
+			// Send the first chat prompt to the user only if the server is ready
+			if serverIsReady {
+				session.sendMessage("initialPrompt", "Hello! What language would you like to use for our chat?")
+			}
+
 
 		case conn := <-h.unregister:
 			// Remove session when client disconnects
@@ -176,6 +239,12 @@ func (h *Hub) Run() {
 		case req := <-h.messageChan:
 			// Handle incoming chat messages in a new goroutine
 			go h.handleChatMessage(req.Session, req.Message)
+
+		case status := <-h.statusUpdateChan:
+			// Broadcast server status updates (e.g., download progress) to all connected clients
+			for conn := range h.sessions {
+				conn.WriteJSON(status)
+			}
 		}
 	}
 }
@@ -193,14 +262,14 @@ func (h *Hub) handleChatMessage(session *ChatSession, userMessage ChatMessage) {
 		session.chatStage = StageSetting
 		session.sendMessage("initialPrompt", "Great! Now, describe the general setting for our story/conversation (e.g., a futuristic city, a medieval kingdom, a quiet suburban house).")
 		session.sendChatUpdate() // Send updated history to client
-		return                   // Do not proceed to LLM generation yet
+		return // Do not proceed to LLM generation yet
 	} else if session.chatStage == StageSetting {
 		session.setting = userMessage.Content
 		session.history = append(session.history, userMessage) // Add user's setting choice to history
 		session.chatStage = StageCharacter
 		session.sendMessage("initialPrompt", "Finally, tell me about the main character(s) characteristics (e.g., a brave knight, a curious scientist, a mischievous cat).")
 		session.sendChatUpdate() // Send updated history to client
-		return                   // Do not proceed to LLM generation yet
+		return // Do not proceed to LLM generation yet
 	} else if session.chatStage == StageCharacter {
 		session.characters = userMessage.Content
 		session.history = append(session.history, userMessage) // Add user's character choice to history
@@ -327,7 +396,8 @@ func (h *Hub) handleChatMessage(session *ChatSession, userMessage ChatMessage) {
 		log.Printf("Stable Diffusion image generation error: %v", err)
 		// Set a placeholder image URL indicating an error
 		assistantMessage.Image = "https://placehold.co/400x300/e5e7eb/6b7280?text=Image+Gen+Failed"
-	}
+	} 
+
 	// 5. Update the assistant's message in history with the generated image
 	assistantMessage.Image = "data:image/png;base64," + base64.StdEncoding.EncodeToString(imgBuf.Bytes())
 	log.Println("Image generated and base64 encoded successfully.")
@@ -400,9 +470,199 @@ func (h *Hub) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// getModelDir determines the OS-specific directory for storing models.
+func getModelDir() (string, error) {
+	// For user-specific application data that is persistent.
+	dataDir, err := os.UserConfigDir()
+	if err != nil {
+		return "", fmt.Errorf("failed to get user config directory: %w", err)
+	}
+	appDataDir := filepath.Join(dataDir, "go-ai-chat", "models")
+	return appDataDir, nil
+}
+
+// ProgressWriter is an io.Writer that reports progress.
+type ProgressWriter struct {
+	io.Writer
+	Total      int64
+	Downloaded int64
+	ModelName  string
+	OnProgress func(progress DownloadProgress)
+	lastUpdate time.Time
+}
+
+func (pw *ProgressWriter) Write(p []byte) (n int, err error) {
+	n, err = pw.Writer.Write(p)
+	pw.Downloaded += int64(n)
+
+	// Throttle updates to avoid spamming the channel/clients
+	if time.Since(pw.lastUpdate) > 100*time.Millisecond || pw.Downloaded == pw.Total {
+		pw.lastUpdate = time.Now()
+		percent := 0.0
+		if pw.Total > 0 {
+			percent = float64(pw.Downloaded) / float64(pw.Total) * 100.0
+		}
+		pw.OnProgress(DownloadProgress{
+			ModelName:  pw.ModelName,
+			Downloaded: pw.Downloaded,
+			Total:      pw.Total,
+			Percent:    percent,
+			Completed:  pw.Downloaded == pw.Total,
+		})
+	}
+	return
+}
+
+// downloadFile downloads a file from a URL to a specified path, reporting progress.
+func downloadFile(url, filepath, modelName string, notifyProgress func(progress DownloadProgress)) error {
+	// Check if file already exists and is not zero-sized
+	if stat, err := os.Stat(filepath); err == nil && stat.Size() > 0 {
+		log.Printf("%s model already exists at %s. Skipping download.", modelName, filepath)
+		notifyProgress(DownloadProgress{
+			ModelName:  modelName,
+			Downloaded: stat.Size(),
+			Total:      stat.Size(),
+			Percent:    100.0,
+			Completed:  true,
+		})
+		return nil
+	}
+
+	log.Printf("Downloading %s model from %s to %s...", modelName, url, filepath)
+	resp, err := http.Get(url)
+	if err != nil {
+		return fmt.Errorf("failed to send GET request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("bad status: %s", resp.Status)
+	}
+
+	out, err := os.Create(filepath)
+	if err != nil {
+		return fmt.Errorf("failed to create file %s: %w", filepath, err)
+	}
+	defer out.Close()
+
+	writer := &ProgressWriter{
+		Writer:     out,
+		Total:      resp.ContentLength,
+		ModelName:  modelName,
+		OnProgress: notifyProgress,
+	}
+
+	_, err = io.Copy(writer, resp.Body)
+	if err != nil {
+		// Clean up partial download if error occurs
+		os.Remove(filepath)
+		return fmt.Errorf("failed to write file: %w", err)
+	}
+
+	return nil
+}
+
+// setupModels handles creating the model directory and downloading models.
+func setupModels(hub *Hub) error {
+	modelDir, err := getModelDir()
+	if err != nil {
+		initialDownloadError = err // Store error globally
+		return fmt.Errorf("failed to get model directory: %w", err)
+	}
+
+	// Initialize global download status
+	llamaDownloadStatus = DownloadProgress{ModelName: "Llama"}
+	sdDownloadStatus = DownloadProgress{ModelName: "StableDiffusion"}
+
+	// Set dynamic model paths
+	llamaModelPath = filepath.Join(modelDir, "llama-2-7b-chat.Q4_K_M.gguf")
+	sdModelPath = filepath.Join(modelDir, "v1-5-pruned-emaonly.safetensors")
+
+	// Callback function to update global status and broadcast
+	notifyFn := func(progress DownloadProgress) {
+		downloadStatusMutex.Lock()
+		defer downloadStatusMutex.Unlock()
+		if progress.ModelName == "Llama" {
+			llamaDownloadStatus = progress
+		} else if progress.ModelName == "StableDiffusion" {
+			sdDownloadStatus = progress
+		}
+		// Send update to hub for broadcast
+		hub.statusUpdateChan <- ServerStatus{
+			Type:    "downloadProgress",
+			Message: fmt.Sprintf("Downloading models... Llama: %.1f%%, Stable Diffusion: %.1f%%", llamaDownloadStatus.Percent, sdDownloadStatus.Percent),
+			LlamaProgress: llamaDownloadStatus,
+			SDProgress:    sdDownloadStatus,
+			IsReady: false,
+		}
+	}
+
+	log.Println("Starting model downloads/checks...")
+	llamaErr := downloadFile(llamaModelURL, llamaModelPath, "Llama", notifyFn)
+	if llamaErr != nil {
+		log.Printf("Failed to download Llama model: %v", llamaErr)
+		llamaDownloadStatus.ErrorMessage = llamaErr.Error()
+		initialDownloadError = fmt.Errorf("llama download failed: %w", llamaErr)
+		// Don't return yet, try to download SD too
+	}
+
+	sdErr := downloadFile(sdModelURL, sdModelPath, "StableDiffusion", notifyFn)
+	if sdErr != nil {
+		log.Printf("Failed to download Stable Diffusion model: %v", sdErr)
+		sdDownloadStatus.ErrorMessage = sdErr.Error()
+		if initialDownloadError == nil { // If Llama didn't fail, then SD error is the primary
+			initialDownloadError = fmt.Errorf("stable diffusion download failed: %w", sdErr)
+		} else { // If both failed, combine message
+			initialDownloadError = fmt.Errorf("llama failed: %w; stable diffusion failed: %v", llamaErr, sdErr)
+		}
+	}
+
+	if initialDownloadError != nil {
+		log.Printf("Model download(s) failed. Server will not be fully functional. Error: %v", initialDownloadError)
+		// Update final status for clients
+		hub.statusUpdateChan <- ServerStatus{
+			Type:    "downloadError",
+			Message: fmt.Sprintf("Error during model download: %v", initialDownloadError),
+			LlamaProgress: llamaDownloadStatus,
+			SDProgress:    sdDownloadStatus,
+			IsReady: false,
+		}
+		return initialDownloadError
+	}
+
+	log.Println("All models are ready.")
+	downloadStatusMutex.Lock()
+	serverIsReady = true // Mark server as ready after downloads
+	downloadStatusMutex.Unlock()
+
+	// Send final ready status
+	hub.statusUpdateChan <- ServerStatus{
+		Type:    "serverReady",
+		Message: "Server is ready! You can start chatting.",
+		LlamaProgress: llamaDownloadStatus,
+		SDProgress:    sdDownloadStatus,
+		IsReady: true,
+	}
+	return nil
+}
+
+
 func main() {
 	hub := NewHub()
-	go hub.Run() // Start the Hub's goroutine
+	// Start the Hub's goroutine
+	go hub.Run()
+
+	// Start model setup in a separate goroutine so main can proceed to serve static files
+	// Hub.Run() will block until models are ready.
+	go func() {
+		if err := setupModels(hub); err != nil {
+			log.Fatalf("Fatal error during model setup: %v", err)
+			// At this point, initialDownloadError is already set and broadcasted by setupModels
+			// If it's a fatal error, the server can't really function, so we might exit or go into a degraded mode.
+			// For now, let's just log and let Hub.Run's check handle it.
+		}
+	}()
+
 
 	// Serve static files (HTML, CSS, JS) from the embedded 'web' directory
 	fs := http.FileServer(http.FS(staticFiles))
@@ -417,3 +677,4 @@ func main() {
 		log.Fatalf("Server failed to start: %v", err)
 	}
 }
+
