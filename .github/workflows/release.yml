@@ -1,10 +1,10 @@
 # .github/workflows/release.yml
 
-name: Build on Release
+name: Build and Publish Release
 
 on:
   release:
-    types: [published] # This workflow runs when a new release is published
+    types: [created] # Trigger on release creation (including drafts)
 
 jobs:
   # --- Linux CPU Build ---
@@ -15,11 +15,13 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          submodules: recursive # Ensure submodules are cloned for go-llama.cpp
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24' # Ensure this matches your Go version in Makefile/Dockerfiles
+          go-version: '1.22' # Ensure this matches your Go version in Makefile/Dockerfiles
 
       - name: Cache Go modules
         uses: actions/cache@v4
@@ -58,11 +60,13 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version: '1.22'
 
       - name: Cache Go modules
         uses: actions/cache@v4
@@ -111,11 +115,13 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version: '1.22'
 
       - name: Cache Go modules
         uses: actions/cache@v4
@@ -160,11 +166,13 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version: '1.22'
 
       - name: Cache Go modules
         uses: actions/cache@v4
@@ -202,11 +210,13 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version: '1.22'
 
       - name: Cache Go modules
         uses: actions/cache@v4
@@ -244,11 +254,13 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version: '1.22'
 
       - name: Cache Go modules
         uses: actions/cache@v4
@@ -302,11 +314,13 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version: '1.22'
 
       - name: Cache Go modules
         uses: actions/cache@v4
@@ -350,3 +364,51 @@ jobs:
           name: imaginarium-amicum-windows-ati
           path: main_windows_ati.exe
           if-no-files-found: error
+
+  # --- Final Job: Publish Release ---
+  publish-release:
+    name: Publish Release
+    runs-on: ubuntu-latest
+    needs:
+      - build-linux-cpu
+      - build-linux-nvidia
+      - build-linux-ati
+      - build-macos-apple
+      - build-windows-cpu
+      - build-windows-nvidia
+      - build-windows-ati
+    if: success() # Only run this job if ALL preceding jobs passed
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get release tag
+        id: get_tag
+        run: echo "RELEASE_TAG=${{ github.event.release.tag_name }}" >> $GITHUB_ENV
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./release_artifacts # Download all artifacts to this directory
+
+      - name: List downloaded artifacts (for verification)
+        run: ls -R ./release_artifacts
+
+      - name: Attach artifacts to release and publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # The gh CLI is pre-installed on GitHub-hosted runners
+          RELEASE_ID=${{ github.event.release.id }}
+          TAG_NAME=${{ env.RELEASE_TAG }}
+
+          echo "Attaching artifacts to release ID: $RELEASE_ID"
+          for artifact_dir in ./release_artifacts/*/; do
+            ARTIFACT_NAME=$(basename "$artifact_dir")
+            echo "Processing artifact: $ARTIFACT_NAME"
+            find "$artifact_dir" -type f -print0 | xargs -0 -I {} gh release upload "$TAG_NAME" {} --clobber
+          done
+
+          echo "Publishing release..."
+          gh release edit "$TAG_NAME" --draft=false
