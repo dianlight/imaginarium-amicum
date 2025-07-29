@@ -1,107 +1,155 @@
 # Makefile for Go AI Chat Application
 
-# Project and Docker Variables
+# Project and Binary Variables
 APP_NAME := imaginarium-amicum
 GO_BIN := main
 WEB_DIR := web
 
 # Go build flags for setting gpuLayersStr in main.go
 LD_FLAGS_CPU := -ldflags="-X main.gpuLayersStr=0"
-LD_FLAGS_NVIDIA := -ldflags="-X main.gpuLayersStr=-1" # -1 often means all layers
-LD_FLAGS_ATI := -ldflags="-X main.gpuLayersStr=-1"    # -1 often means all layers
-LD_FLAGS_APPLE := -ldflags="-X main.gpuLayersStr=-1"  # -1 for Metal offloading
+LD_FLAGS_GPU := -ldflags="-X main.gpuLayersStr=-1" # -1 often means all layers
 
-# --- Build Targets ---
+# --- Common Helper Targets ---
 
-.PHONY: all build clean docker-build-cpu docker-build-nvidia docker-build-ati run-cpu run-nvidia run-ati build-apple run-apple build-bindings-for-docker
-
-all: build docker-build-cpu
-
-# Build the Go application locally (CPU-only)
-build:
-	@echo "Building Go application locally (CPU-only)..."
+.PHONY: ensure-go-modules
+ensure-go-modules:
+	@echo "Ensuring Go modules are tidy and dependencies downloaded..."
 	@go mod tidy
-	@go mod download # Ensure seasonjs/stable-diffusion is downloaded for CGO
-	@CGO_ENABLED=1 go build $(LD_FLAGS_CPU) -o $(GO_BIN) .
-	@echo "Local build complete: ./"$(GO_BIN)
+	@go mod download # This fetches seasonjs/stable-diffusion and its CGO dependencies
 
-# Build the Go application locally for Apple Silicon (Metal acceleration)
-build-apple:
-	@echo "Building Go application locally for Apple Silicon (Metal acceleration)..."
-	@go mod tidy
-	@go mod download # Ensure seasonjs/stable-diffusion is downloaded for CGO
-	@echo "Building go-llama.cpp with Metal support..."
-	@if [ ! -d "binding/go-llama.cpp" ]; then git clone --recurse-submodules https://github.com/go-skynet/go-llama.cpp.git binding/go-llama.cpp; fi
-	@cd binding/go-llama.cpp && BUILD_TYPE=metal make libbinding.a CGO_LDFLAGS="-framework Foundation -framework Metal -framework MetalKit -framework MetalPerformanceShaders"
-	@echo "Building main Go application with Metal bindings (including seasonjs/stable-diffusion CGO)..."
-	# CGO_LDFLAGS for go-llama.cpp and Metal frameworks. seasonjs/stable-diffusion's CGO handled by go build.
-	# C_INCLUDE_PATH needs to point to llama.cpp's common headers, and potentially stable-diffusion.cpp's src if seasonjs's CGO doesn't handle it
-	@CGO_LDFLAGS="-L$(PWD)/binding/go-llama.cpp -framework Foundation -framework Metal -framework MetalKit -framework MetalPerformanceShaders" \
+.PHONY: ensure-llama-binding
+ensure-llama-binding:
+	@echo "Ensuring go-llama.cpp binding is available..."
+	@if [ ! -d "binding/go-llama.cpp" ]; then \
+		echo "Cloning go-llama.cpp..."; \
+		git clone --recurse-submodules https://github.com/go-skynet/go-llama.cpp.git binding/go-llama.cpp; \
+	else \
+		echo "go-llama.cpp already cloned."; \
+	fi
+	# No need to compile libbinding.a here, as platform-specific builds will do it with correct flags.
+
+# --- Build Targets per OS/Architecture ---
+
+.PHONY: build all
+all: build # Default target now points to build-linux-cpu as a common starting point if not specified.
+# You might want to change 'all' to your primary development platform, e.g., build-macos-apple
+
+# Build for current OS (CPU) is removed as per your request.
+# You should use specific targets like build-linux-cpu, build-macos-apple, etc.
+
+# Linux (AMD64 CPU)
+.PHONY: build-linux-cpu run-linux-cpu
+build-linux-cpu: ensure-go-modules ensure-llama-binding
+	@echo "Building for Linux (CPU)..."
+	@cd binding/go-llama.cpp && make libbinding.a BUILD_TYPE=cpu CGO_LDFLAGS=""
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=1 \
 	C_INCLUDE_PATH="$(PWD)/binding/go-llama.cpp:$(PWD)/binding/go-llama.cpp/llama.cpp/common" \
-	CGO_ENABLED=1 go build $(LD_FLAGS_APPLE) -o $(GO_BIN) .
-	@echo "Apple Silicon local build complete: ./"$(GO_BIN)
+	CGO_LDFLAGS="-L$(PWD)/binding/go-llama.cpp" \
+	go build $(LD_FLAGS_CPU) -o $(GO_BIN)_linux_amd64 .
+run-linux-cpu: build-linux-cpu
+	@echo "Running Linux (CPU) build..."
+	./$(GO_BIN)_linux_amd64
 
-# Target to build go-llama.cpp bindings for Docker stages
-# This target should be invoked from within a Dockerfile RUN command.
-# It takes BUILD_TYPE and CGO_LDFLAGS as environment variables from the Dockerfile context.
-build-bindings-for-docker:
-	@echo "Building go-llama.cpp bindings with BUILD_TYPE=$(BUILD_TYPE)..."
-	@if [ ! -d "binding/go-llama.cpp" ]; then git clone --recurse-submodules https://github.com/go-skynet/go-llama.cpp.git binding/go-llama.cpp; fi
-	@cd binding/go-llama.cpp && BUILD_TYPE="$(BUILD_TYPE)" make libbinding.a CGO_LDFLAGS="$(CGO_LDFLAGS)"
+# Linux (NVIDIA GPU) - Assumes CUDA toolkit is installed on the build machine
+.PHONY: build-linux-nvidia run-linux-nvidia
+build-linux-nvidia: ensure-go-modules ensure-llama-binding
+	@echo "Building for Linux (NVIDIA GPU)..."
+	@cd binding/go-llama.cpp && make libbinding.a BUILD_TYPE=cublas CGO_LDFLAGS="-lcublas -lcudart -L/usr/local/cuda/lib64"
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=1 \
+	C_INCLUDE_PATH="$(PWD)/binding/go-llama.cpp:$(PWD)/binding/go-llama.cpp/llama.cpp/common:/usr/local/cuda/include" \
+	CGO_LDFLAGS="-L$(PWD)/binding/go-llama.cpp -L/usr/local/cuda/lib64 -lcublas -lcudart" \
+	go build $(LD_FLAGS_GPU) -o $(GO_BIN)_linux_nvidia .
+run-linux-nvidia: build-linux-nvidia
+	@echo "Running Linux (NVIDIA GPU) build (requires CUDA drivers/toolkit on host)..."
+	LD_LIBRARY_PATH=/usr/local/cuda/lib64 ./$(GO_BIN)_linux_nvidia
 
-# --- Docker Build Targets ---
+# Linux (AMD GPU - ROCm) - Assumes ROCm toolchain is installed on the build machine
+.PHONY: build-linux-ati run-linux-ati
+build-linux-ati: ensure-go-modules ensure-llama-binding
+	@echo "Building for Linux (AMD GPU - ROCm)..."
+	@cd binding/go-llama.cpp && CC=/opt/rocm/llvm/bin/clang CXX=/opt/rocm/llvm/bin/clang++ make libbinding.a BUILD_TYPE=hipblas CGO_LDFLAGS="-O3 --hip-link --rtlib=compiler-rt -lrocblas -lhipblas -L/opt/rocm/lib"
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=1 \
+	CC=/opt/rocm/llvm/bin/clang CXX=/opt/rocm/llvm/bin/clang++ \
+	C_INCLUDE_PATH="$(PWD)/binding/go-llama.cpp:$(PWD)/binding/go-llama.cpp/llama.cpp/common:/opt/rocm/include" \
+	CGO_LDFLAGS="-L$(PWD)/binding/go-llama.cpp -L/opt/rocm/lib -lrocblas -lhipblas -O3 --hip-link --rtlib=compiler-rt" \
+	go build $(LD_FLAGS_GPU) -o $(GO_BIN)_linux_ati .
+run-linux-ati: build-linux-ati
+	@echo "Running Linux (AMD GPU - ROCm) build (requires ROCm drivers on host)..."
+	LD_LIBRARY_PATH=/opt/rocm/lib ./$(GO_BIN)_linux_ati
 
-# Build Docker image for CPU (AMD64 / ARM64 compatible)
-docker-build-cpu:
-	@echo "Building Docker image for CPU (AMD64 / ARM64 compatible)..."
-	@docker build --build-arg GPU_LAYERS=0 -f Dockerfile.cpu -t $(APP_NAME):cpu .
-	@echo "Docker image $(APP_NAME):cpu built successfully."
+# macOS (Apple Silicon - Metal GPU)
+.PHONY: build-macos-apple run-macos-apple
+build-macos-apple: ensure-go-modules ensure-llama-binding
+	@echo "Building for macOS (Apple Silicon - Metal GPU)..."
+	@cd binding/go-llama.cpp && make libbinding.a BUILD_TYPE=metal CGO_LDFLAGS="-framework Foundation -framework Metal -framework MetalKit -framework MetalPerformanceShaders"
+	GOOS=darwin GOARCH=arm64 CGO_ENABLED=1 \
+	C_INCLUDE_PATH="$(PWD)/binding/go-llama.cpp:$(PWD)/binding/go-llama.cpp/llama.cpp/common" \
+	CGO_LDFLAGS="-L$(PWD)/binding/go-llama.cpp -framework Foundation -framework Metal -framework MetalKit -framework MetalPerformanceShaders" \
+	go build $(LD_FLAGS_GPU) -o $(GO_BIN)_macos_arm64 .
+run-macos-apple: build-macos-apple
+	@echo "Running macOS (Apple Silicon - Metal GPU) build..."
+	./$(GO_BIN)_macos_arm64
 
-# Build Docker image for Nvidia GPU (requires CUDA toolkit on host for building, NVIDIA Container Toolkit for running)
-# This will use an Nvidia CUDA base image.
-docker-build-nvidia:
-	@echo "Building Docker image for Nvidia GPU..."
-	@docker build --build-arg GPU_LAYERS=-1 -f Dockerfile.nvidia -t $(APP_NAME):nvidia .
-	@echo "Docker image $(APP_NAME):nvidia built successfully."
+# Windows (AMD64 CPU)
+.PHONY: build-windows-cpu run-windows-cpu
+build-windows-cpu: ensure-go-modules ensure-llama-binding
+	@echo "Building for Windows (CPU)..."
+	@cd binding/go-llama.cpp && make libbinding.a BUILD_TYPE=cpu CGO_LDFLAGS=""
+	GOOS=windows GOARCH=amd64 CGO_ENABLED=1 \
+	C_INCLUDE_PATH="$(PWD)/binding/go-llama.cpp;$(PWD)/binding/go-llama.cpp/llama.cpp/common" \
+	CGO_LDFLAGS="-L$(PWD)/binding/go-llama.cpp" \
+	go build $(LD_FLAGS_CPU) -o $(GO_BIN)_windows_amd64.exe .
+run-windows-cpu: build-windows-cpu
+	@echo "Running Windows (CPU) build..."
+	.\\$(GO_BIN)_windows_amd64.exe
 
-# Build Docker image for AMD GPU (requires ROCm on host for building, AMD ROCm support for Docker for running)
-# This will use an AMD ROCm base image.
-docker-build-ati:
-	@echo "Building Docker image for AMD GPU (ROCm)..."
-	@docker build --build-arg GPU_LAYERS=-1 -f Dockerfile.ati -t $(APP_NAME):ati .
-	@echo "Docker image $(APP_NAME):ati built successfully."
+# Windows (NVIDIA GPU) - Experimental and requires specific setup on Windows
+.PHONY: build-windows-nvidia run-windows-nvidia
+build-windows-nvidia: ensure-go-modules ensure-llama-binding
+	@echo "Building for Windows (NVIDIA GPU) - EXPERIMENTAL. Requires MSYS2/MinGW and CUDA SDK."
+	@echo "You might need to adjust CGO_LDFLAGS to point to your CUDA installation (e.g., -L\"C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/vX.Y/lib/x64\")"
+	@echo "Also ensure go-llama.cpp's Makefile 'make libbinding.a' works with your Windows compiler."
+	@cd binding/go-llama.cpp && make libbinding.a BUILD_TYPE=cublas CGO_LDFLAGS="-lcublas -lcudart -L/path/to/cuda/lib/x64" # Placeholder
+	GOOS=windows GOARCH=amd64 CGO_ENABLED=1 \
+	C_INCLUDE_PATH="$(PWD)/binding/go-llama.cpp;$(PWD)/binding/go-llama.cpp/llama.cpp/common;C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/vX.Y/include" \
+	CGO_LDFLAGS="-L$(PWD)/binding/go-llama.cpp -L\"C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/vX.Y/lib/x64\" -lcublas -lcudart" \
+	go build $(LD_FLAGS_GPU) -o $(GO_BIN)_windows_nvidia.exe .
+run-windows-nvidia: build-windows-nvidia
+	@echo "Running Windows (NVIDIA GPU) build (requires CUDA drivers/toolkit on host).."
+	@echo "Ensure CUDA libraries are in your PATH or copy them next to the executable."
+	.\\$(GO_BIN)_windows_nvidia.exe
 
-# --- Docker Run Targets ---
+# Windows (AMD GPU - ROCm) - Highly experimental for native Windows, typically via WSL2
+.PHONY: build-windows-ati run-windows-ati
+build-windows-ati: ensure-go-modules ensure-llama-binding
+	@echo "Building for Windows (AMD GPU - ROCm) - HIGHLY EXPERIMENTAL. Best in WSL2."
+	@echo "Requires MSYS2/MinGW and ROCm SDK. You will need to set compiler (CC/CXX) paths to ROCm-enabled clang."
+	@echo "Adjust CGO_LDFLAGS for ROCm libraries and ensure go-llama.cpp's Makefile works with your Windows compiler."
+	@cd binding/go-llama.cpp && CC=/opt/rocm/llvm/bin/clang CXX=/opt/rocm/llvm/bin/clang++ make libbinding.a BUILD_TYPE=hipblas CGO_LDFLAGS="-O3 --hip-link --rtlib=compiler-rt -lrocblas -lhipblas -L/path/to/rocm/lib" # Placeholder
+	GOOS=windows GOARCH=amd64 CGO_ENABLED=1 \
+	CC=/path/to/rocm/llvm/bin/clang CXX=/path/to/rocm/llvm/bin/clang++ \
+	C_INCLUDE_PATH="$(PWD)/binding/go-llama.cpp;$(PWD)/binding/go-llama.cpp/llama.cpp/common;/path/to/rocm/include" \
+	CGO_LDFLAGS="-L$(PWD)/binding/go-llama.cpp -L/path/to/rocm/lib -lrocblas -lhipblas -O3 --hip-link --rtlib=compiler-rt" \
+	go build $(LD_FLAGS_GPU) -o $(GO_BIN)_windows_ati.exe .
+run-windows-ati: build-windows-ati
+	@echo "Running Windows (AMD GPU - ROCm) build (requires ROCm drivers on host)."
+	@echo "Ensure ROCm libraries are in your PATH or copy them next to the executable."
+	.\\$(GO_BIN)_windows_ati.exe
 
-# Run the CPU Docker container
-run-cpu: docker-build-cpu
-	@echo "Running CPU Docker container on port 8080..."
-	@docker run --rm -p 8080:8080 $(APP_NAME):cpu
-
-# Run the Nvidia GPU Docker container
-# Requires NVIDIA Container Toolkit installed on your Docker host.
-run-nvidia: docker-build-nvidia
-	@echo "Running Nvidia GPU Docker container on port 8080..."
-	@docker run --rm --gpus all -p 8080:8080 $(APP_NAME):nvidia
-
-# Run the AMD GPU Docker container
-# Requires ROCm enabled Docker runtime on your host.
-# The `--device` flags provide access to the necessary ROCm devices.
-run-ati: docker-build-ati
-	@echo "Running AMD GPU Docker container on port 8080 (ROCm)..."
-	@docker run --rm --device=/dev/kfd --device=/dev/dri -p 8080:8080 $(APP_NAME):ati
-
-# Run the locally built Apple Silicon optimized application
-run-apple: build-apple
-	@echo "Running Apple Silicon optimized application locally on port 8080..."
-	@./$(GO_BIN)
 
 # --- Clean Target ---
 
+.PHONY: clean
 clean:
 	@echo "Cleaning up..."
-	@rm -f $(GO_BIN)
-	@rm -rf binding/go-llama.cpp binding/go-sd.cpp # Clean both old and new binding directories
-	@docker rmi $(APP_NAME):cpu $(APP_NAME):nvidia $(APP_NAME):ati 2>/dev/null || true
+	@rm -f $(GO_BIN) \
+		$(GO_BIN)_linux_amd64 \
+		$(GO_BIN)_linux_nvidia \
+		$(GO_BIN)_linux_ati \
+		$(GO_BIN)_macos_arm64 \
+		$(GO_BIN)_windows_amd64.exe \
+		$(GO_BIN)_windows_nvidia.exe \
+		$(GO_BIN)_windows_ati.exe
+	@rm -rf binding/go-llama.cpp # Clean go-llama.cpp binding directory
 	@echo "Cleanup complete."
 

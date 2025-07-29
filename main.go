@@ -110,6 +110,13 @@ var (
 	initialDownloadError  error
 )
 
+// MessageRequest encapsulates an incoming message with its session.
+type MessageRequest struct {
+	Session *ChatSession
+	Message ChatMessage
+}
+
+
 // Hub maintains the set of active connections and broadcasts messages to the clients.
 type Hub struct {
 	sessions       map[*websocket.Conn]*ChatSession

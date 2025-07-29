@@ -1,0 +1,349 @@
+# .github/workflows/release.yml
+
+name: Build on Release
+
+on:
+  release:
+    types: [published] # This workflow runs when a new release is published
+
+jobs:
+  # --- Linux CPU Build ---
+  build-linux-cpu:
+    name: Build Linux (CPU)
+    runs-on: ubuntu-latest # Standard Linux runner
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22' # Ensure this matches your Go version in Makefile/Dockerfiles
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Cache go-llama.cpp binding
+        uses: actions/cache@v4
+        with:
+          path: binding/go-llama.cpp
+          key: ${{ runner.os }}-llama-binding-${{ hashFiles('binding/go-llama.cpp/go.mod') }}
+          restore-keys: |
+            ${{ runner.os }}-llama-binding-
+
+      - name: Build for Linux (CPU)
+        run: make build-linux-cpu
+
+      - name: Upload Linux CPU Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: imaginarium-amicum-linux-cpu
+          path: main_linux_amd64
+          if-no-files-found: error # Fail the workflow if the artifact is not found
+
+  # --- Linux NVIDIA GPU Build (Requires specialized runner) ---
+  build-linux-nvidia:
+    name: Build Linux (NVIDIA GPU)
+    runs-on: ubuntu-latest # You'll likely need a self-hosted runner with CUDA installed for this to work
+    # Alternatively, consider a Docker-in-Docker setup with a CUDA image, but that's more complex
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Cache go-llama.cpp binding
+        uses: actions/cache@v4
+        with:
+          path: binding/go-llama.cpp
+          key: ${{ runner.os }}-llama-binding-${{ hashFiles('binding/go-llama.cpp/go.mod') }}
+          restore-keys: |
+            ${{ runner.os }}-llama-binding-
+
+      - name: Install NVIDIA CUDA Toolkit (Example - may vary based on runner)
+        # This step is highly dependent on the runner environment.
+        # For standard ubuntu-latest, you'd need to manually install CUDA drivers and toolkit.
+        # For self-hosted runners, ensure CUDA is pre-installed.
+        run: |
+          sudo apt-get update
+          # Example: sudo apt-get install -y nvidia-cuda-toolkit # This might be enough for compilation
+          # A full CUDA installation on a GitHub-hosted runner is not straightforward.
+          echo "Please ensure CUDA Toolkit is available on your runner for GPU builds."
+        continue-on-error: true # Allow workflow to continue if CUDA install fails on default runner
+
+      - name: Build for Linux (NVIDIA GPU)
+        run: make build-linux-nvidia
+
+      - name: Upload Linux NVIDIA GPU Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: imaginarium-amicum-linux-nvidia
+          path: main_linux_nvidia
+          if-no-files-found: error
+
+  # --- Linux AMD GPU Build (Requires specialized runner) ---
+  build-linux-ati:
+    name: Build Linux (AMD GPU)
+    runs-on: ubuntu-latest # You'll likely need a self-hosted runner with ROCm installed for this to work
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Cache go-llama.cpp binding
+        uses: actions/cache@v4
+        with:
+          path: binding/go-llama.cpp
+          key: ${{ runner.os }}-llama-binding-${{ hashFiles('binding/go-llama.cpp/go.mod') }}
+          restore-keys: |
+            ${{ runner.os }}-llama-binding-
+
+      - name: Install AMD ROCm Toolkit (Example - highly specialized)
+        # ROCm installation on standard GitHub-hosted runners is not supported.
+        # This job requires a self-hosted runner with ROCm pre-installed and configured.
+        echo "Please ensure ROCm Toolkit is available on your runner for AMD GPU builds."
+        continue-on-error: true
+
+      - name: Build for Linux (AMD GPU)
+        run: make build-linux-ati
+
+      - name: Upload Linux AMD GPU Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: imaginarium-amicum-linux-ati
+          path: main_linux_ati
+          if-no-files-found: error
+
+  # --- macOS Apple Silicon (Metal) Build ---
+  build-macos-apple:
+    name: Build macOS (Apple Silicon/Metal)
+    runs-on: macos-latest # Apple Silicon runner is often 'macos-latest' with arm64 architecture
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Cache go-llama.cpp binding
+        uses: actions/cache@v4
+        with:
+          path: binding/go-llama.cpp
+          key: ${{ runner.os }}-llama-binding-${{ hashFiles('binding/go-llama.cpp/go.mod') }}
+          restore-keys: |
+            ${{ runner.os }}-llama-binding-
+
+      - name: Build for macOS (Apple Silicon/Metal)
+        run: make build-macos-apple
+
+      - name: Upload macOS Apple Silicon Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: imaginarium-amicum-macos-apple
+          path: main_macos_arm64
+          if-no-files-found: error
+
+  # --- Windows CPU Build ---
+  build-windows-cpu:
+    name: Build Windows (CPU)
+    runs-on: windows-latest # Standard Windows runner
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Cache go-llama.cpp binding
+        uses: actions/cache@v4
+        with:
+          path: binding/go-llama.cpp
+          key: ${{ runner.os }}-llama-binding-${{ hashFiles('binding/go-llama.cpp/go.mod') }}
+          restore-keys: |
+            ${{ runner.os }}-llama-binding-
+
+      - name: Build for Windows (CPU)
+        run: make build-windows-cpu
+
+      - name: Upload Windows CPU Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: imaginarium-amicum-windows-cpu
+          path: main_windows_amd64.exe # Note the .exe extension for Windows
+          if-no-files-found: error
+
+  # --- Windows NVIDIA GPU Build (Requires specialized runner) ---
+  build-windows-nvidia:
+    name: Build Windows (NVIDIA GPU)
+    runs-on: windows-latest # You'll likely need a self-hosted runner with CUDA installed for this to work
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Cache go-llama.cpp binding
+        uses: actions/cache@v4
+        with:
+          path: binding/go-llama.cpp
+          key: ${{ runner.os }}-llama-binding-${{ hashFiles('binding/go-llama.cpp/go.mod') }}
+          restore-keys: |
+            ${{ runner.os }}-llama-binding-
+
+      - name: Setup MSYS2 (for GNU Make and other tools on Windows)
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: make git # Ensure make is available for go-llama.cpp binding build
+
+      - name: Install NVIDIA CUDA Toolkit on Windows (Example - very complex for hosted runners)
+        # This step is highly dependent on the runner environment.
+        # For standard windows-latest, manually installing CUDA is very difficult.
+        # This job most likely requires a self-hosted runner with CUDA pre-installed.
+        echo "Please ensure CUDA Toolkit is available on your runner for GPU builds on Windows."
+        continue-on-error: true
+
+      - name: Build for Windows (NVIDIA GPU)
+        shell: msys2 {0} # Use MSYS2 shell to run make command
+        run: make build-windows-nvidia
+
+      - name: Upload Windows NVIDIA GPU Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: imaginarium-amicum-windows-nvidia
+          path: main_windows_nvidia.exe
+          if-no-files-found: error
+
+  # --- Windows AMD GPU Build (Requires specialized runner) ---
+  build-windows-ati:
+    name: Build Windows (AMD GPU)
+    runs-on: windows-latest # You'll likely need a self-hosted runner with ROCm installed for this to work
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Cache go-llama.cpp binding
+        uses: actions/cache@v4
+        with:
+          path: binding/go-llama.cpp
+          key: ${{ runner.os }}-llama-binding-${{ hashFiles('binding/go-llama.cpp/go.mod') }}
+          restore-keys: |
+            ${{ runner.os }}-llama-binding-
+
+      - name: Setup MSYS2 (for GNU Make and other tools on Windows)
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: make git # Ensure make is available for go-llama.cpp binding build
+
+      - name: Install AMD ROCm Toolkit on Windows (Example - highly experimental for hosted runners)
+        # This is extremely experimental for standard GitHub-hosted runners.
+        # This job almost certainly requires a self-hosted runner with ROCm pre-installed.
+        echo "Please ensure ROCm Toolkit is available on your runner for AMD GPU builds on Windows."
+        continue-on-error: true
+
+      - name: Build for Windows (AMD GPU)
+        shell: msys2 {0} # Use MSYS2 shell to run make command
+        run: make build-windows-ati
+
+      - name: Upload Windows AMD GPU Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: imaginarium-amicum-windows-ati
+          path: main_windows_ati.exe
+          if-no-files-found: error
