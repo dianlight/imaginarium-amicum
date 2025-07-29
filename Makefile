@@ -21,6 +21,7 @@ all: build docker-build-cpu
 build:
 	@echo "Building Go application locally (CPU-only)..."
 	@go mod tidy
+	@go mod download # Ensure seasonjs/stable-diffusion is downloaded for CGO
 	@CGO_ENABLED=1 go build $(LD_FLAGS_CPU) -o $(GO_BIN) .
 	@echo "Local build complete: ./"$(GO_BIN)
 
@@ -28,22 +29,21 @@ build:
 build-apple:
 	@echo "Building Go application locally for Apple Silicon (Metal acceleration)..."
 	@go mod tidy
+	@go mod download # Ensure seasonjs/stable-diffusion is downloaded for CGO
 	@echo "Building go-llama.cpp with Metal support..."
 	@if [ ! -d "binding/go-llama.cpp" ]; then git clone --recurse-submodules https://github.com/go-skynet/go-llama.cpp.git binding/go-llama.cpp; fi
 	@cd binding/go-llama.cpp && BUILD_TYPE=metal make libbinding.a CGO_LDFLAGS="-framework Foundation -framework Metal -framework MetalKit -framework MetalPerformanceShaders"
-	@echo "Building main Go application with Metal bindings..."
-	# Correct C_INCLUDE_PATH to include common headers from submodules
-	# LDFLAGS links the compiled static libraries (.a) and required Metal frameworks.
-	# C_INCLUDE_PATH points to directories containing necessary headers, including those from submodules.
+	@echo "Building main Go application with Metal bindings (including seasonjs/stable-diffusion CGO)..."
+	# CGO_LDFLAGS for go-llama.cpp and Metal frameworks. seasonjs/stable-diffusion's CGO handled by go build.
+	# C_INCLUDE_PATH needs to point to llama.cpp's common headers, and potentially stable-diffusion.cpp's src if seasonjs's CGO doesn't handle it
 	@CGO_LDFLAGS="-L$(PWD)/binding/go-llama.cpp -framework Foundation -framework Metal -framework MetalKit -framework MetalPerformanceShaders" \
 	C_INCLUDE_PATH="$(PWD)/binding/go-llama.cpp:$(PWD)/binding/go-llama.cpp/llama.cpp/common" \
 	CGO_ENABLED=1 go build $(LD_FLAGS_APPLE) -o $(GO_BIN) .
 	@echo "Apple Silicon local build complete: ./"$(GO_BIN)
 
-# Target to build bindings specifically for Docker stages
+# Target to build go-llama.cpp bindings for Docker stages
 # This target should be invoked from within a Dockerfile RUN command.
 # It takes BUILD_TYPE and CGO_LDFLAGS as environment variables from the Dockerfile context.
-# CC and CXX should be set in the Dockerfile's RUN command if non-default compilers are needed.
 build-bindings-for-docker:
 	@echo "Building go-llama.cpp bindings with BUILD_TYPE=$(BUILD_TYPE)..."
 	@if [ ! -d "binding/go-llama.cpp" ]; then git clone --recurse-submodules https://github.com/go-skynet/go-llama.cpp.git binding/go-llama.cpp; fi
@@ -101,7 +101,7 @@ run-apple: build-apple
 clean:
 	@echo "Cleaning up..."
 	@rm -f $(GO_BIN)
-	@rm -rf binding/go-llama.cpp binding/go-sd.cpp # Remove cloned binding repos
+	@rm -rf binding/go-llama.cpp binding/go-sd.cpp # Clean both old and new binding directories
 	@docker rmi $(APP_NAME):cpu $(APP_NAME):nvidia $(APP_NAME):ati 2>/dev/null || true
 	@echo "Cleanup complete."
 

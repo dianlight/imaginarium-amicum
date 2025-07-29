@@ -19,7 +19,7 @@ import (
 	"time"
 
 	"github.com/go-skynet/go-llama.cpp"
-	sd "github.com/seasonjs/stable-diffusion"
+	sd "github.com/seasonjs/stable-diffusion" // Corrected Stable Diffusion binding
 	"github.com/gorilla/websocket"
 )
 
@@ -33,12 +33,12 @@ const (
 
 // These paths will now be determined at runtime based on the OS.
 var llamaModelPath string
-var sdModelPath string
+var sdModelPath string // Stable Diffusion model path re-added
 
 // Model URLs for download
 const (
 	llamaModelURL = "https://huggingface.co/TheBloke/Llama-2-7B-Chat-GGUF/resolve/main/llama-2-7b-chat.Q4_K_M.gguf"
-	sdModelURL    = "https://huggingface.co/runwayml/stable-diffusion-v1-5/resolve/main/v1-5-pruned-emaonly.safetensors"
+	sdModelURL    = "https://huggingface.co/runwayml/stable-diffusion-v1-5/resolve/main/v1-5-pruned-emaonly.safetensors" // SD model URL re-added
 )
 
 // gpuLayersStr will be set at build time using ldflags
@@ -56,7 +56,7 @@ var upgrader = websocket.Upgrader{
 type ChatMessage struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
-	Image   string `json:"image,omitempty"`
+	Image   string `json:"image,omitempty"` // Image field now will be populated by backend
 }
 
 // Chat stages for guiding the user through initial setup.
@@ -73,7 +73,7 @@ type ChatSession struct {
 	conn         *websocket.Conn
 	history      []ChatMessage
 	llm          *llama.LLama
-	sdm          *sd.Model
+	sdm          *sd.Model // Corrected Stable Diffusion instance type
 	messageLimit int
 
 	chatStage  int
@@ -97,14 +97,14 @@ type ServerStatus struct {
 	Type          string           `json:"type"` // "downloadProgress" or "serverReady"
 	Message       string           `json:"message"`
 	LlamaProgress DownloadProgress `json:"llamaProgress"`
-	SDProgress    DownloadProgress `json:"sdProgress"`
+	SDProgress    DownloadProgress `json:"sdProgress"` // SDProgress re-added
 	IsReady       bool             `json:"isReady"`
 }
 
 // Global download status and mutex to protect it
 var (
 	llamaDownloadStatus   DownloadProgress
-	sdDownloadStatus      DownloadProgress
+	sdDownloadStatus      DownloadProgress // sdDownloadStatus re-added
 	downloadStatusMutex   sync.Mutex
 	serverIsReady         bool // True once all models are downloaded/initialized
 	initialDownloadError  error
@@ -148,6 +148,10 @@ func (h *Hub) Run() {
 	}
 	log.Printf("Initializing models with GPU layers: %d", gpuLayers)
 
+	var llm *llama.LLama
+	var sdm *sd.Model // Corrected sdm variable type
+	var err error
+
 	// Wait until models are downloaded or an error occurs
 	for {
 		downloadStatusMutex.Lock()
@@ -164,32 +168,35 @@ func (h *Hub) Run() {
 		time.Sleep(500 * time.Millisecond) // Wait for downloads to complete
 	}
 
-	llm, err := llama.New(llamaModelPath, llama.SetContext(defaultMessageContextLimit*2), llama.SetGPULayers(gpuLayers))
+	llm, err = llama.New(llamaModelPath, llama.SetContext(defaultMessageContextLimit*2), llama.SetGPULayers(gpuLayers))
 	if err != nil {
 		log.Fatalf("Error initializing Llama LLM from %s: %v", llamaModelPath, err)
 	}
 	defer llm.Free()
 
-	// Initialize Stable Diffusion Model for image generation
-	options := sd.DefaultOptions //  sd.SetGPULayers(gpuLayers)
-	sdm, err := sd.NewAutoModel(options)
-	if err != nil {
-		log.Fatalf("Error initializing Stable Diffusion model from %s: %v", sdModelPath, err)
-	}
-	defer sdm.Close()
+	// Stable Diffusion Model initialization re-added
+	options := sd.DefaultOptions() // Corrected: sd.DefaultOptions is a function
+	options.Threads = 4             // Example: Set threads for SD
+	options.SetGPULayers(gpuLayers) // Apply GPU layers option
 
-	sdm.SetLogCallback(func(level sd.LogLevel, msg string) {
-		log.Println(msg)
-	})
-
-	//modelPath, err := hapi.Model("justinpinkney/miniSD").Get("miniSD.ckpt")
-
-	err = sdm.LoadFromFile(sdModelPath)
+	sdm, err = sd.NewAutoModel(options)
 	if err != nil {
 		log.Fatalf("Error initializing Stable Diffusion model: %v", err)
 	}
+	defer sdm.Close()
 
-	log.Println("LLM and Stable Diffusion models initialized successfully.")
+	// seasonjs/stable-diffusion does not expose SetLogCallback
+	// sdm.SetLogCallback(func(level sd.LogLevel, msg string) {
+	// 	log.Println(msg)
+	// })
+
+	err = sdm.LoadFromFile(sdModelPath)
+	if err != nil {
+		log.Fatalf("Error loading Stable Diffusion model from %s: %v", sdModelPath, err)
+	}
+
+
+	log.Println("LLM and Stable Diffusion models initialized successfully.") // Updated log message
 
 	for {
 		select {
@@ -199,7 +206,7 @@ func (h *Hub) Run() {
 				conn:         conn,
 				history:      []ChatMessage{},
 				llm:          llm, // Assign the shared LLM instance
-				sdm:          sdm, // Assign the shared SD instance
+				sdm:          sdm, // SD instance assignment re-added
 				messageLimit: defaultMessageContextLimit,
 				chatStage:    StageLanguage, // Start at the language selection stage
 			}
@@ -212,7 +219,7 @@ func (h *Hub) Run() {
 				Type:          "serverReady", // Assume ready if we got here
 				Message:       "Server is ready! You can start chatting.",
 				LlamaProgress: llamaDownloadStatus,
-				SDProgress:    sdDownloadStatus,
+				SDProgress:    sdDownloadStatus, // SDProgress re-added
 				IsReady:       serverIsReady,
 			}
 			if !serverIsReady { // If somehow a client connects before ready (shouldn't happen with current blocking logic)
@@ -267,14 +274,15 @@ func (h *Hub) handleChatMessage(session *ChatSession, userMessage ChatMessage) {
 		session.setting = userMessage.Content
 		session.history = append(session.history, userMessage) // Add user's setting choice to history
 		session.chatStage = StageCharacter
-		session.sendMessage("initialPrompt", "Finally, tell me about the main character(s) characteristics (e.g., a brave knight, a curious scientist, a mischievous cat).")
+		// Updated message to include image generation context
+		session.sendMessage("initialPrompt", "Finally, tell me about the main character(s) characteristics (e.g., a brave knight, a curious scientist, a mischievous cat). I'll also try to build a contextualized image based on my responses.")
 		session.sendChatUpdate() // Send updated history to client
 		return // Do not proceed to LLM generation yet
 	} else if session.chatStage == StageCharacter {
 		session.characters = userMessage.Content
 		session.history = append(session.history, userMessage) // Add user's character choice to history
 		session.chatStage = StageChatting
-		session.sendMessage("status", "Alright, let's start our chat! I'll generate images based on our conversation.")
+		session.sendMessage("status", "Alright, let's start our chat! I'll generate responses and try to build contextualized images.") // Updated message
 		session.sendChatUpdate() // Send updated history to client
 		// Fall through to normal chat processing now
 	}
@@ -341,7 +349,7 @@ func (h *Hub) handleChatMessage(session *ChatSession, userMessage ChatMessage) {
 		llama.SetTopK(40),
 		llama.SetTopP(0.95),
 		llama.SetTemperature(0.7),
-		llama.SetSeed(int(time.Now().UnixNano())), // Use a new seed for each prediction
+		llama.SetSeed(time.Now().UnixNano()), // Use a new seed for each prediction
 	)
 	if err != nil {
 		log.Printf("Llama LLM prediction error: %v", err)
@@ -354,55 +362,42 @@ func (h *Hub) handleChatMessage(session *ChatSession, userMessage ChatMessage) {
 		Role:    "assistant",
 		Content: assistantResponse,
 	}
-	// Temporarily add assistant's text response to history (image will be added later)
+	// Add assistant's text response to history
 	session.history = append(session.history, assistantMessage)
 
-	// 4. Generate contextualized image using go-sd.cpp
-	// First, generate a concise image prompt from the assistant's response using the LLM.
-	imagePromptText := fmt.Sprintf("Create a visual prompt for an image based on the following text: '%s'. The prompt should be concise and descriptive, suitable for an image generation model.", assistantResponse)
-	log.Printf("Generating image prompt using Llama LLM for Stable Diffusion: %s", imagePromptText)
 
-	sdPrompt, err := session.llm.Predict(
-		imagePromptText,
-		llama.SetTokens(50), // Keep the image prompt short
-		llama.SetTopK(40),
-		llama.SetTopP(0.95),
-		llama.SetTemperature(0.7),
-		llama.SetSeed(int(time.Now().UnixNano()+1)), // Different seed for SD prompt
-	)
-	if err != nil {
-		log.Printf("Error generating Stable Diffusion prompt from LLM: %v", err)
-		sdPrompt = assistantResponse // Fallback to raw assistant response as prompt
-	}
-	log.Printf("Stable Diffusion Prompt: %s", sdPrompt)
+	// 4. Generate image based on AI response (re-added)
+	log.Printf("Generating image based on AI response: %s", assistantResponse)
+	imagePrompt := fmt.Sprintf("Generate a realistic image based on this description from an AI assistant, keeping the language, setting, and character context in mind. Focus on key visual elements. Description: \"%s\"", assistantResponse)
+	// Optionally, add negative prompts or other SD parameters here
+	sdOpts := sd.DefaultOptions() // Corrected: sd.DefaultOptions is a function
+	sdOpts.Width = 512
+	sdOpts.Height = 512
+	sdOpts.SampleMethod = sd.SampleMethodEulerA
+	sdOpts.SampleSteps = 20
+	sdOpts.CfgScale = 7.0
+	sdOpts.ClipSkip = 1 // Common setting for SD 1.5
+	sdOpts.Seed = uint32(time.Now().UnixNano()) // Use a new seed for each image
 
-	// Now, generate the image using go-sd.cpp
-	log.Println("Starting image generation...")
-	// These options are common for Stable Diffusion v1.5. Adjust as needed.
-	opts := sd.DefaultFullParams
-	opts.BatchCount = 1
-	opts.Width = 512
-	opts.Height = 512
-	opts.SampleSteps = 25
-	opts.Seed = time.Now().UnixNano()
-	opts.CfgScale = 7.0
-	opts.NegativePrompt = "ugly, deformed, disfigured, low quality, bad anatomy, bad art, blurry, out of focus"
-
-	var imgBuf bytes.Buffer
-	var imgs []io.Writer
-	imgs = append(imgs, &imgBuf)
-	err = session.sdm.Predict(sdPrompt, opts, imgs)
+	img, err := session.sdm.Predict(imagePrompt, sdOpts)
 	if err != nil {
 		log.Printf("Stable Diffusion image generation error: %v", err)
-		// Set a placeholder image URL indicating an error
-		assistantMessage.Image = "https://placehold.co/400x300/e5e7eb/6b7280?text=Image+Gen+Failed"
-	} 
+		// Send a status message to the user about image generation failure
+		session.sendMessage("status", "Could not generate an image for the last response.")
+	} else {
+		log.Println("Image generated successfully. Encoding to PNG.")
+		var buf bytes.Buffer
+		err := png.Encode(&buf, img)
+		if err != nil {
+			log.Printf("Failed to encode PNG image: %v", err)
+		} else {
+			assistantMessage.Image = "data:image/png;base64," + base64.StdEncoding.EncodeToString(buf.Bytes())
+			// Update the last message in history with the image data
+			session.history[len(session.history)-1].Image = assistantMessage.Image
+		}
+	}
 
-	// 5. Update the assistant's message in history with the generated image
-	assistantMessage.Image = "data:image/png;base64," + base64.StdEncoding.EncodeToString(imgBuf.Bytes())
-	log.Println("Image generated and base64 encoded successfully.")
-	session.history[len(session.history)-1] = assistantMessage
-	session.sendChatUpdate() // Send final updated history with image to client
+	session.sendChatUpdate() // Send final updated history to client
 }
 
 // sendChatUpdate sends the current chat history to the client via WebSocket.
@@ -477,7 +472,7 @@ func getModelDir() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to get user config directory: %w", err)
 	}
-	appDataDir := filepath.Join(dataDir, "go-ai-chat", "models")
+	appDataDir := filepath.Join(dataDir, "imaginarium-amicum", "models") // Updated app data dir name
 	return appDataDir, nil
 }
 
@@ -570,13 +565,20 @@ func setupModels(hub *Hub) error {
 		return fmt.Errorf("failed to get model directory: %w", err)
 	}
 
+	// Ensure the model directory exists
+	if err := os.MkdirAll(modelDir, 0755); err != nil {
+		initialDownloadError = err
+		return fmt.Errorf("failed to create model directory %s: %w", modelDir, err)
+	}
+
+
 	// Initialize global download status
 	llamaDownloadStatus = DownloadProgress{ModelName: "Llama"}
-	sdDownloadStatus = DownloadProgress{ModelName: "StableDiffusion"}
+	sdDownloadStatus = DownloadProgress{ModelName: "StableDiffusion"} // SD download status re-added
 
 	// Set dynamic model paths
 	llamaModelPath = filepath.Join(modelDir, "llama-2-7b-chat.Q4_K_M.gguf")
-	sdModelPath = filepath.Join(modelDir, "v1-5-pruned-emaonly.safetensors")
+	sdModelPath = filepath.Join(modelDir, "v1-5-pruned-emaonly.safetensors") // SD model path setup re-added
 
 	// Callback function to update global status and broadcast
 	notifyFn := func(progress DownloadProgress) {
@@ -584,36 +586,38 @@ func setupModels(hub *Hub) error {
 		defer downloadStatusMutex.Unlock()
 		if progress.ModelName == "Llama" {
 			llamaDownloadStatus = progress
-		} else if progress.ModelName == "StableDiffusion" {
+		} else if progress.ModelName == "StableDiffusion" { // SD progress update logic re-added
 			sdDownloadStatus = progress
 		}
+
 		// Send update to hub for broadcast
 		hub.statusUpdateChan <- ServerStatus{
 			Type:    "downloadProgress",
-			Message: fmt.Sprintf("Downloading models... Llama: %.1f%%, Stable Diffusion: %.1f%%", llamaDownloadStatus.Percent, sdDownloadStatus.Percent),
+			Message: fmt.Sprintf("Downloading Llama model: %.1f%%, Stable Diffusion model: %.1f%%", llamaDownloadStatus.Percent, sdDownloadStatus.Percent),
 			LlamaProgress: llamaDownloadStatus,
-			SDProgress:    sdDownloadStatus,
+			SDProgress:    sdDownloadStatus, // SDProgress re-added
 			IsReady: false,
 		}
 	}
 
-	log.Println("Starting model downloads/checks...")
+	log.Println("Starting Llama model download/check...")
 	llamaErr := downloadFile(llamaModelURL, llamaModelPath, "Llama", notifyFn)
 	if llamaErr != nil {
 		log.Printf("Failed to download Llama model: %v", llamaErr)
 		llamaDownloadStatus.ErrorMessage = llamaErr.Error()
 		initialDownloadError = fmt.Errorf("llama download failed: %w", llamaErr)
-		// Don't return yet, try to download SD too
 	}
 
+	// Stable Diffusion download logic re-added
+	log.Println("Starting Stable Diffusion model download/check...")
 	sdErr := downloadFile(sdModelURL, sdModelPath, "StableDiffusion", notifyFn)
 	if sdErr != nil {
 		log.Printf("Failed to download Stable Diffusion model: %v", sdErr)
 		sdDownloadStatus.ErrorMessage = sdErr.Error()
-		if initialDownloadError == nil { // If Llama didn't fail, then SD error is the primary
+		if initialDownloadError == nil { // Only set if no prior error
 			initialDownloadError = fmt.Errorf("stable diffusion download failed: %w", sdErr)
-		} else { // If both failed, combine message
-			initialDownloadError = fmt.Errorf("llama failed: %w; stable diffusion failed: %v", llamaErr, sdErr)
+		} else { // Append to existing error
+			initialDownloadError = fmt.Errorf("%w; stable diffusion download failed: %v", initialDownloadError, sdErr)
 		}
 	}
 
@@ -624,7 +628,7 @@ func setupModels(hub *Hub) error {
 			Type:    "downloadError",
 			Message: fmt.Sprintf("Error during model download: %v", initialDownloadError),
 			LlamaProgress: llamaDownloadStatus,
-			SDProgress:    sdDownloadStatus,
+			SDProgress:    sdDownloadStatus, // SDProgress re-added
 			IsReady: false,
 		}
 		return initialDownloadError
@@ -640,7 +644,7 @@ func setupModels(hub *Hub) error {
 		Type:    "serverReady",
 		Message: "Server is ready! You can start chatting.",
 		LlamaProgress: llamaDownloadStatus,
-		SDProgress:    sdDownloadStatus,
+		SDProgress:    sdDownloadStatus, // SDProgress re-added
 		IsReady: true,
 	}
 	return nil
