@@ -10,7 +10,7 @@ MODELS_DIR := models
 LD_FLAGS_CPU := -ldflags="-X main.gpuLayersStr=0"
 LD_FLAGS_NVIDIA := -ldflags="-X main.gpuLayersStr=-1" # -1 often means all layers
 LD_FLAGS_ATI := -ldflags="-X main.gpuLayersStr=-1"    # -1 often means all layers
-LD_FLAGS_APPLE := -ldflags="-X main.gpuLayersStr=-1"  # -1 for Metal offloading
+LD_FLAGS_APPLE := -ldflags="-extldflags '-framework Foundation -framework Metal -framework MetalKit -framework MetalPerformanceShaders'  -X main.gpuLayersStr=-1"  # -1 for Metal offloading
 
 # --- Build Targets ---
 
@@ -31,13 +31,11 @@ build-apple: pull-models
 	@go mod tidy
 	@echo "Building go-llama.cpp with Metal support..."
 	@if [ ! -d "binding/go-llama.cpp" ]; then git clone --recurse-submodules https://github.com/go-skynet/go-llama.cpp.git binding/go-llama.cpp; fi
-	@cd binding/go-llama.cpp && BUILD_TYPE=metal make libbinding.a CGO_LDFLAGS="-framework Foundation -framework Metal -framework MetalKit -framework MetalPerformanceShaders"
-	@echo "Building go-sd.cpp with Metal support..."
-	@if [ ! -d "binding/go-sd.cpp" ]; then git clone --recurse-submodules https://github.com/go-skynet/go-sd.cpp.git binding/go-sd.cpp; fi
-	@cd binding/go-sd.cpp && BUILD_TYPE=metal make libbinding.a CGO_LDFLAGS="-framework Foundation -framework Metal -framework MetalKit -framework MetalPerformanceShaders"
+	@cd binding/go-llama.cpp && BUILD_TYPE=metal make libbinding.a
 	@echo "Building main Go application with Metal bindings..."
-	@CGO_LDFLAGS="-L$(PWD)/binding/go-llama.cpp -L$(PWD)/binding/go-sd.cpp -framework Foundation -framework Metal -framework MetalKit -framework MetalPerformanceShaders" \
-	C_INCLUDE_PATH="$(PWD)/binding/go-llama.cpp:$(PWD)/binding/go-sd.cpp" \
+	@CGO_LDFLAGS="-framework Foundation -framework Metal -framework MetalKit -framework MetalPerformanceShaders" \
+	C_INCLUDE_PATH="./binding/go-llama.cpp" \
+	LIBRARY_PATH="./binding/go-llama.cpp" \
 	CGO_ENABLED=1 go build $(LD_FLAGS_APPLE) -o $(GO_BIN) .
 	@echo "Apple Silicon local build complete: ./"$(GO_BIN)
 

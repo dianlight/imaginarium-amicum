@@ -3,21 +3,19 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"embed"
 	"encoding/base64"
-	"encoding/json"
-	"fmt"
-	"image/png" // For encoding the generated image
+	"fmt" // For encoding the generated image
+	"io"
 	"log"
 	"net/http"
 	"strconv" // Added for string to int conversion
 	"sync"
 	"time"
 
-	"github.com/go-skynet/go-llama.cpp" // go-llama.cpp for LLM inference
-	sd "github.com/go-skynet/go-sd.cpp" // go-sd.cpp for Stable Diffusion image generation
-	"github.com/gorilla/websocket"      // For WebSocket communication
+	"github.com/go-skynet/go-llama.cpp"       // go-llama.cpp for LLM inference
+	"github.com/gorilla/websocket"            // For WebSocket communication
+	sd "github.com/seasonjs/stable-diffusion" // go-sd.cpp for Stable Diffusion image generation
 )
 
 //go:embed web/*
@@ -51,17 +49,17 @@ var upgrader = websocket.Upgrader{
 
 // ChatMessage represents a single message in the chat.
 type ChatMessage struct {
-	Role    string `json:"role"`    // "user" or "assistant"
-	Content string `json:"content"` // The message text
+	Role    string `json:"role"`            // "user" or "assistant"
+	Content string `json:"content"`         // The message text
 	Image   string `json:"image,omitempty"` // Base64 encoded image data (e.g., "data:image/png;base64,...")
 }
 
 // Chat stages for guiding the user through initial setup.
 const (
-	StageLanguage = iota // 0: Awaiting user's preferred language
-	StageSetting         // 1: Awaiting user's preferred setting
-	StageCharacter       // 2: Awaiting user's main character characteristics
-	StageChatting        // 3: Normal chat mode
+	StageLanguage  = iota // 0: Awaiting user's preferred language
+	StageSetting          // 1: Awaiting user's preferred setting
+	StageCharacter        // 2: Awaiting user's main character characteristics
+	StageChatting         // 3: Normal chat mode
 )
 
 // ChatSession holds the context for a single user's chat.
@@ -70,14 +68,14 @@ type ChatSession struct {
 	conn         *websocket.Conn
 	history      []ChatMessage
 	llm          *llama.LLama // Shared LLM instance for chat and prompt generation
-	sdm          *sd.SD       // Shared Stable Diffusion instance for image generation
+	sdm          *sd.Model    // Shared Stable Diffusion instance for image generation
 	messageLimit int          // Configurable limit for chat history
 
 	// New fields for initial fixed context
-	chatStage    int // Current stage of the chat setup
-	language     string
-	setting      string
-	characters   string
+	chatStage  int // Current stage of the chat setup
+	language   string
+	setting    string
+	characters string
 }
 
 // Hub maintains the set of active connections and broadcasts messages to the clients.
@@ -130,11 +128,23 @@ func (h *Hub) Run() {
 	defer llm.Free()
 
 	// Initialize Stable Diffusion Model for image generation
-	sdm, err := sd.New(sdModelPath, sd.SetGPULayers(gpuLayers))
+	options := sd.DefaultOptions //  sd.SetGPULayers(gpuLayers)
+	sdm, err := sd.NewAutoModel(options)
 	if err != nil {
 		log.Fatalf("Error initializing Stable Diffusion model: %v", err)
 	}
-	defer sdm.Free()
+	defer sdm.Close()
+
+	sdm.SetLogCallback(func(level sd.LogLevel, msg string) {
+		log.Println(msg)
+	})
+
+	//modelPath, err := hapi.Model("justinpinkney/miniSD").Get("miniSD.ckpt")
+
+	err = sdm.LoadFromFile(sdModelPath)
+	if err != nil {
+		log.Fatalf("Error initializing Stable Diffusion model: %v", err)
+	}
 
 	log.Println("LLM and Stable Diffusion models initialized successfully.")
 
@@ -183,14 +193,14 @@ func (h *Hub) handleChatMessage(session *ChatSession, userMessage ChatMessage) {
 		session.chatStage = StageSetting
 		session.sendMessage("initialPrompt", "Great! Now, describe the general setting for our story/conversation (e.g., a futuristic city, a medieval kingdom, a quiet suburban house).")
 		session.sendChatUpdate() // Send updated history to client
-		return // Do not proceed to LLM generation yet
+		return                   // Do not proceed to LLM generation yet
 	} else if session.chatStage == StageSetting {
 		session.setting = userMessage.Content
 		session.history = append(session.history, userMessage) // Add user's setting choice to history
 		session.chatStage = StageCharacter
 		session.sendMessage("initialPrompt", "Finally, tell me about the main character(s) characteristics (e.g., a brave knight, a curious scientist, a mischievous cat).")
 		session.sendChatUpdate() // Send updated history to client
-		return // Do not proceed to LLM generation yet
+		return                   // Do not proceed to LLM generation yet
 	} else if session.chatStage == StageCharacter {
 		session.characters = userMessage.Content
 		session.history = append(session.history, userMessage) // Add user's character choice to history
@@ -262,7 +272,7 @@ func (h *Hub) handleChatMessage(session *ChatSession, userMessage ChatMessage) {
 		llama.SetTopK(40),
 		llama.SetTopP(0.95),
 		llama.SetTemperature(0.7),
-		llama.SetSeed(time.Now().UnixNano()), // Use a new seed for each prediction
+		llama.SetSeed(int(time.Now().UnixNano())), // Use a new seed for each prediction
 	)
 	if err != nil {
 		log.Printf("Llama LLM prediction error: %v", err)
@@ -289,7 +299,7 @@ func (h *Hub) handleChatMessage(session *ChatSession, userMessage ChatMessage) {
 		llama.SetTopK(40),
 		llama.SetTopP(0.95),
 		llama.SetTemperature(0.7),
-		llama.SetSeed(time.Now().UnixNano()+1), // Different seed for SD prompt
+		llama.SetSeed(int(time.Now().UnixNano()+1)), // Different seed for SD prompt
 	)
 	if err != nil {
 		log.Printf("Error generating Stable Diffusion prompt from LLM: %v", err)
@@ -300,34 +310,27 @@ func (h *Hub) handleChatMessage(session *ChatSession, userMessage ChatMessage) {
 	// Now, generate the image using go-sd.cpp
 	log.Println("Starting image generation...")
 	// These options are common for Stable Diffusion v1.5. Adjust as needed.
-	opts := []sd.Option{
-		sd.SetWidth(512),
-		sd.SetHeight(512),
-		sd.SetSteps(25),           // Number of sampling steps
-		sd.SetSeed(time.Now().UnixNano()), // Seed for reproducibility of image
-		sd.SetCfgScale(7.0),       // Classifier-free guidance scale
-		sd.SetNegativePrompt("ugly, deformed, disfigured, low quality, bad anatomy, bad art, blurry, out of focus"),
-	}
+	opts := sd.DefaultFullParams
+	opts.BatchCount = 1
+	opts.Width = 512
+	opts.Height = 512
+	opts.SampleSteps = 25
+	opts.Seed = time.Now().UnixNano()
+	opts.CfgScale = 7.0
+	opts.NegativePrompt = "ugly, deformed, disfigured, low quality, bad anatomy, bad art, blurry, out of focus"
 
-	img, err := session.sdm.Generate(sdPrompt, opts...)
+	var imgBuf bytes.Buffer
+	var imgs []io.Writer
+	imgs = append(imgs, &imgBuf)
+	err = session.sdm.Predict(sdPrompt, opts, imgs)
 	if err != nil {
 		log.Printf("Stable Diffusion image generation error: %v", err)
 		// Set a placeholder image URL indicating an error
 		assistantMessage.Image = "https://placehold.co/400x300/e5e7eb/6b7280?text=Image+Gen+Failed"
-	} else {
-		// Convert the generated image (image.RGBA) to a base64 encoded PNG
-		var imgBuf bytes.Buffer
-		err := png.Encode(&imgBuf, img) // Encode image to PNG format
-		if err != nil {
-			log.Printf("Error encoding image to PNG: %v", err)
-			assistantMessage.Image = "https://placehold.co/400x300/e5e7eb/6b7280?text=Image+Encode+Failed"
-		} else {
-			assistantMessage.Image = "data:image/png;base64," + base64.StdEncoding.EncodeToString(imgBuf.Bytes())
-			log.Println("Image generated and base64 encoded successfully.")
-		}
 	}
-
 	// 5. Update the assistant's message in history with the generated image
+	assistantMessage.Image = "data:image/png;base64," + base64.StdEncoding.EncodeToString(imgBuf.Bytes())
+	log.Println("Image generated and base64 encoded successfully.")
 	session.history[len(session.history)-1] = assistantMessage
 	session.sendChatUpdate() // Send final updated history with image to client
 }
@@ -414,4 +417,3 @@ func main() {
 		log.Fatalf("Server failed to start: %v", err)
 	}
 }
-
