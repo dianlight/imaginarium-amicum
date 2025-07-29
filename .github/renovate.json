@@ -44,5 +44,5 @@
     "binding/go-llama.cpp/**",
     "binding/go-sd.cpp/**"
   ],
-  "enabledManagers": ["go-mod", "github-actions"]
+  "enabledManagers": ["go", "github-actions"]
 }
