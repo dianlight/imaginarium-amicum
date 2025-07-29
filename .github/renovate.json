@@ -1,0 +1,48 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "autodiscover": true,
+  "extends": [
+    "config:base"
+  ],
+  "labels": ["dependencies", "renovate"],
+  "prConcurrentLimit": 10,
+  "prHourlyLimit": 2,
+  "schedule": ["at any time"],
+  "timezone": "Europe/Rome",
+  "platform": "github",
+  "packageRules": [
+    {
+      "matchDepTypes": ["dependencies"],
+      "matchUpdateTypes": ["patch", "minor"],
+      "automerge": true,
+      "automergeType": "branch-push"
+    },
+    {
+      "matchPackagePrefixes": ["go-llama.cpp"],
+      "groupName": "go-llama.cpp updates",
+      "automerge": false,
+      "description": "Updates for go-llama.cpp binding. These often require manual checks due to CGO."
+    },
+    {
+      "matchPackagePrefixes": ["github.com/seasonjs/stable-diffusion"],
+      "groupName": "stable-diffusion updates",
+      "automerge": false,
+      "description": "Updates for stable-diffusion binding. These often require manual checks due to CGO."
+    },
+    {
+      "matchPackagePrefixes": ["github.com/actions/"],
+      "groupName": "github-actions updates",
+      "automerge": true
+    },
+    {
+      "matchPackagePrefixes": ["golang.org/"],
+      "groupName": "standard-library updates",
+      "automerge": true
+    }
+  ],
+  "ignorePaths": [
+    "binding/go-llama.cpp/**",
+    "binding/go-sd.cpp/**"
+  ],
+  "enabledManagers": ["go-mod", "github-actions"]
+}
