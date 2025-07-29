@@ -43,6 +43,5 @@
   "ignorePaths": [
     "binding/go-llama.cpp/**",
     "binding/go-sd.cpp/**"
-  ],
-  "enabledManagers": ["go", "github-actions"]
+  ]
 }
