@@ -35,3 +35,6 @@ go.work.sum
 models/
 binding/
 main_macos_arm64
+
+# Build directory
+build/

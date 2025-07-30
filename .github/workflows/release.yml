@@ -120,7 +120,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: imaginarium-amicum-linux-cpu
-          path: main_linux_amd64
+          path: build/main_linux_amd64
           if-no-files-found: error
 
   # --- Linux NVIDIA GPU Build ---
@@ -171,7 +171,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: imaginarium-amicum-linux-nvidia
-          path: main_linux_nvidia
+          path: build/main_linux_nvidia
           if-no-files-found: error
 
   # --- Linux AMD GPU Build ---
@@ -226,7 +226,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: imaginarium-amicum-linux-ati
-          path: main_linux_ati
+          path: build/main_linux_ati
           if-no-files-found: error
 
   # --- macOS Apple Silicon (Metal) Build ---
@@ -270,7 +270,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: imaginarium-amicum-macos-apple
-          path: main_macos_arm64
+          path: build/main_macos_arm64
           if-no-files-found: error
 
   # --- Windows CPU Build ---
@@ -315,7 +315,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: imaginarium-amicum-windows-cpu
-          path: main_windows_amd64.exe
+          path: build/main_windows_amd64.exe
           if-no-files-found: error
 
   # --- Windows NVIDIA GPU Build ---
@@ -373,7 +373,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: imaginarium-amicum-windows-nvidia
-          path: main_windows_nvidia.exe
+          path: build/main_windows_nvidia.exe
           if-no-files-found: error
 
   # --- Windows AMD GPU Build ---
@@ -431,7 +431,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: imaginarium-amicum-windows-ati
-          path: main_windows_ati.exe
+          path: build/main_windows_ati.exe
           if-no-files-found: error
 
   # --- Final Job: Publish Release ---
