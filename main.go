@@ -454,6 +454,8 @@ func (h *Hub) handleChatMessage(session *ChatSession, userMessage ChatMessage) {
 		log.Println("Image generated and base64 encoded successfully.")
 	}
 
+	assistantMessage.Image = "https://placehold.co/400x300/e5e7eb/6b7280?text=Image+Gen+Failed"
+
 	session.history[len(session.history)-1].Image = assistantMessage.Image
 
 	session.sendChatUpdate() // Send final updated history to client
