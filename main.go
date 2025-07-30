@@ -11,13 +11,15 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
+	"runtime/debug"
 	"strconv"
 	"sync"
 	"time"
 
 	"github.com/go-skynet/go-llama.cpp"
-	sd "github.com/seasonjs/stable-diffusion" // Corrected Stable Diffusion binding
 	"github.com/gorilla/websocket"
+	sd "github.com/seasonjs/stable-diffusion" // Corrected Stable Diffusion binding
 )
 
 //go:embed web/*
@@ -100,11 +102,11 @@ type ServerStatus struct {
 
 // Global download status and mutex to protect it
 var (
-	llamaDownloadStatus   DownloadProgress
-	sdDownloadStatus      DownloadProgress // sdDownloadStatus re-added
-	downloadStatusMutex   sync.Mutex
-	serverIsReady         bool // True once all models are downloaded/initialized
-	initialDownloadError  error
+	llamaDownloadStatus  DownloadProgress
+	sdDownloadStatus     DownloadProgress // sdDownloadStatus re-added
+	downloadStatusMutex  sync.Mutex
+	serverIsReady        bool // True once all models are downloaded/initialized
+	initialDownloadError error
 )
 
 // MessageRequest encapsulates an incoming message with its session.
@@ -113,23 +115,22 @@ type MessageRequest struct {
 	Message ChatMessage
 }
 
-
 // Hub maintains the set of active connections and broadcasts messages to the clients.
 type Hub struct {
-	sessions       map[*websocket.Conn]*ChatSession
-	register       chan *websocket.Conn
-	unregister     chan *websocket.Conn
-	messageChan    chan *MessageRequest // Channel for incoming messages
-	statusUpdateChan chan ServerStatus // Channel for server-wide status updates
+	sessions         map[*websocket.Conn]*ChatSession
+	register         chan *websocket.Conn
+	unregister       chan *websocket.Conn
+	messageChan      chan *MessageRequest // Channel for incoming messages
+	statusUpdateChan chan ServerStatus    // Channel for server-wide status updates
 }
 
 // NewHub creates and returns a new Hub instance.
 func NewHub() *Hub {
 	return &Hub{
-		sessions:       make(map[*websocket.Conn]*ChatSession),
-		register:       make(chan *websocket.Conn),
-		unregister:     make(chan *websocket.Conn),
-		messageChan:    make(chan *MessageRequest),
+		sessions:         make(map[*websocket.Conn]*ChatSession),
+		register:         make(chan *websocket.Conn),
+		unregister:       make(chan *websocket.Conn),
+		messageChan:      make(chan *MessageRequest),
 		statusUpdateChan: make(chan ServerStatus),
 	}
 }
@@ -172,24 +173,52 @@ func (h *Hub) Run() {
 		time.Sleep(500 * time.Millisecond) // Wait for downloads to complete
 	}
 
+	// Try to initialize with Metal first, if it fails, fall back to CPU
+	log.Printf("Attempting to initialize Llama LLM with Metal GPU acceleration (layers: %d)", gpuLayers)
 	llm, err = llama.New(llamaModelPath, llama.SetContext(defaultMessageContextLimit*2), llama.SetGPULayers(gpuLayers))
 	if err != nil {
-		log.Fatalf("Error initializing Llama LLM from %s: %v", llamaModelPath, err)
+		log.Printf("Warning: Metal GPU initialization failed: %v", err)
+		log.Printf("Falling back to CPU-only mode for Llama LLM")
+
+		// Fall back to CPU-only mode (0 GPU layers)
+		llm, err = llama.New(llamaModelPath, llama.SetContext(defaultMessageContextLimit*2), llama.SetGPULayers(0))
+		if err != nil {
+			log.Fatalf("Error initializing Llama LLM from %s even in CPU-only mode: %v", llamaModelPath, err)
+		}
+		log.Printf("Successfully initialized Llama LLM in CPU-only mode")
+	} else {
+		log.Printf("Successfully initialized Llama LLM with Metal GPU acceleration")
 	}
 	defer llm.Free()
 
 	// Stable Diffusion Model initialization re-added
-	options := sd.DefaultOptions    // Corrected: sd.DefaultOptions is a function
-	if gpuLayers != 0 {
-		options.GpuEnable = true             
+	options := sd.DefaultOptions // Corrected: sd.DefaultOptions is a function
+
+	// Try with GPU first if requested
+	if gpuLayers != 0 && runtime.GOOS != "darwin" {
+		log.Printf("Attempting to initialize Stable Diffusion with GPU acceleration")
+		options.GpuEnable = true
+
+		sdm, err = sd.NewAutoModel(options)
+		if err != nil {
+			log.Printf("Warning: GPU initialization for Stable Diffusion failed: %v", err)
+			log.Printf("Falling back to CPU-only mode for Stable Diffusion")
+
+			// Fall back to CPU
+			options.GpuEnable = false
+		}
 	} else {
-		options.GpuEnable = false            
+		options.GpuEnable = false
 	}
 
-	sdm, err = sd.NewAutoModel(options)
-	if err != nil {
-		log.Fatalf("Error initializing Stable Diffusion model: %v", err)
+	// If we haven't successfully created the model yet (either because GPU was not requested or GPU init failed)
+	if sdm == nil {
+		sdm, err = sd.NewAutoModel(options)
+		if err != nil {
+			log.Fatalf("Error initializing Stable Diffusion model: %v", err)
+		}
 	}
+
 	defer sdm.Close()
 
 	// seasonjs/stable-diffusion does not expose SetLogCallback
@@ -197,11 +226,13 @@ func (h *Hub) Run() {
 	// 	log.Println(msg)
 	// })
 
+	log.Printf("Loading Stable Diffusion model from %s", sdModelPath)
 	err = sdm.LoadFromFile(sdModelPath)
 	if err != nil {
 		log.Fatalf("Error loading Stable Diffusion model from %s: %v", sdModelPath, err)
 	}
 
+	log.Printf("Successfully loaded Stable Diffusion model (GPU enabled: %v)", options.GpuEnable)
 
 	log.Println("LLM and Stable Diffusion models initialized successfully.") // Updated log message
 
@@ -241,7 +272,6 @@ func (h *Hub) Run() {
 				session.sendMessage("initialPrompt", "Hello! What language would you like to use for our chat?")
 			}
 
-
 		case conn := <-h.unregister:
 			// Remove session when client disconnects
 			if session, ok := h.sessions[conn]; ok {
@@ -270,27 +300,28 @@ func (h *Hub) handleChatMessage(session *ChatSession, userMessage ChatMessage) {
 	defer session.mu.Unlock()
 
 	// Handle initial chat setup stages
-	if session.chatStage == StageLanguage {
+	switch session.chatStage {
+	case StageLanguage:
 		session.language = userMessage.Content
 		session.history = append(session.history, userMessage) // Add user's language choice to history
 		session.chatStage = StageSetting
 		session.sendMessage("initialPrompt", "Great! Now, describe the general setting for our story/conversation (e.g., a futuristic city, a medieval kingdom, a quiet suburban house).")
 		session.sendChatUpdate() // Send updated history to client
-		return // Do not proceed to LLM generation yet
-	} else if session.chatStage == StageSetting {
+		return                   // Do not proceed to LLM generation yet
+	case StageSetting:
 		session.setting = userMessage.Content
 		session.history = append(session.history, userMessage) // Add user's setting choice to history
 		session.chatStage = StageCharacter
 		// Updated message to include image generation context
 		session.sendMessage("initialPrompt", "Finally, tell me about the main character(s) characteristics (e.g., a brave knight, a curious scientist, a mischievous cat). I'll also try to build a contextualized image based on my responses.")
 		session.sendChatUpdate() // Send updated history to client
-		return // Do not proceed to LLM generation yet
-	} else if session.chatStage == StageCharacter {
+		return                   // Do not proceed to LLM generation yet
+	case StageCharacter:
 		session.characters = userMessage.Content
 		session.history = append(session.history, userMessage) // Add user's character choice to history
 		session.chatStage = StageChatting
 		session.sendMessage("status", "Alright, let's start our chat! I'll generate responses and try to build contextualized images.") // Updated message
-		session.sendChatUpdate() // Send updated history to client
+		session.sendChatUpdate()                                                                                                        // Send updated history to client
 		// Fall through to normal chat processing now
 	}
 
@@ -373,26 +404,33 @@ func (h *Hub) handleChatMessage(session *ChatSession, userMessage ChatMessage) {
 	session.history = append(session.history, assistantMessage)
 
 	log.Println("Starting image generation...")
+
+	// Notify client that image generation has started
+	session.conn.WriteJSON(map[string]string{
+		"type": "imageGenerationStart",
+	})
+
 	imagePrompt := fmt.Sprintf("Generate a realistic image based on this description from an AI assistant, keeping the language, setting, and character context in mind. Focus on key visual elements. Description: \"%s\"", assistantResponse)
 	// 4. Generate image based on AI response (re-added)
 	log.Printf("Generating image based on AI response: %s", assistantResponse)
 	// Optionally, add negative prompts or other SD parameters here
 	sdOpts := sd.DefaultFullParams
-    // NegativePrompt:   "out of frame, lowers, text, error, cropped, worst quality, low quality, jpeg artifacts, ugly, duplicate, morbid, mutilated, out of frame, extra fingers, mutated hands, poorly drawn hands, poorly drawn face, mutation, deformed, blurry, dehydrated, bad anatomy, bad proportions, extra limbs, cloned face, disfigured, gross proportions, malformed limbs, missing arms, missing legs, extra arms, extra legs, fused fingers, too many fingers, long neck, username, watermark, signature",
+	// NegativePrompt:   "out of frame, lowers, text, error, cropped, worst quality, low quality, jpeg artifacts, ugly, duplicate, morbid, mutilated, out of frame, extra fingers, mutated hands, poorly drawn hands, poorly drawn face, mutation, deformed, blurry, dehydrated, bad anatomy, bad proportions, extra limbs, cloned face, disfigured, gross proportions, malformed limbs, missing arms, missing legs, extra arms, extra legs, fused fingers, too many fingers, long neck, username, watermark, signature",
 	//CfgScale:         7.0,
 	//Width:            512,
 	//Height:           512,
 	//SampleMethod:     EULER_A,
 	//SampleSteps:      20,
+	sdOpts.SampleSteps = 5
 	//Strength:         0.4,
 	//Seed:             42,
 	sdOpts.Seed = time.Now().UnixNano() // Use a new seed for each image
 	//BatchCount:       1,
 	//OutputsImageType: PNG,
 
-	var imgBuf bytes.Buffer
+	imgBuf := bytes.NewBuffer(make([]byte, 0, 1024*1024)) // Preallocate 1MB buffer for image data
 	var imgs []io.Writer
-	imgs = append(imgs, &imgBuf)
+	imgs = append(imgs, imgBuf)
 	err = session.sdm.Predict(imagePrompt, sdOpts, imgs)
 	if err != nil {
 		log.Printf("Stable Diffusion image generation error: %v", err)
@@ -401,7 +439,7 @@ func (h *Hub) handleChatMessage(session *ChatSession, userMessage ChatMessage) {
 	} else {
 		assistantMessage.Image = "data:image/png;base64," + base64.StdEncoding.EncodeToString(imgBuf.Bytes())
 		log.Println("Image generated and base64 encoded successfully.")
-	} 
+	}
 
 	session.history[len(session.history)-1].Image = assistantMessage.Image
 
@@ -518,21 +556,105 @@ func (pw *ProgressWriter) Write(p []byte) (n int, err error) {
 
 // downloadFile downloads a file from a URL to a specified path, reporting progress.
 func downloadFile(url, filepath, modelName string, notifyProgress func(progress DownloadProgress)) error {
-	// Check if file already exists and is not zero-sized
+	log.Printf("TRACE: Inside downloadFile function for %s model", modelName)
+	// First, make a HEAD request to get the expected file size
+	var expectedSize int64 = -1 // Default to unknown size
+	client := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return nil // Allow redirects
+		},
+	}
+	log.Printf("TRACE: Making HEAD request to %s for %s model", url, modelName)
+	headResp, err := client.Head(url)
+	if err != nil {
+		log.Printf("Warning: Failed to get file size with HEAD request: %v. Will proceed with download anyway.", err)
+		// Continue with download even if HEAD fails
+	} else {
+		defer headResp.Body.Close()
+		// Get expected size, checking for X-Linked-Size header which some CDNs use for the actual file size
+		expectedSize = headResp.ContentLength
+		log.Printf("TRACE: Got content length %d for %s model", expectedSize, modelName)
+		if linkedSize := headResp.Header.Get("X-Linked-Size"); linkedSize != "" {
+			if size, err := strconv.ParseInt(linkedSize, 10, 64); err == nil && size > 0 {
+				expectedSize = size
+				log.Printf("Using X-Linked-Size header for expected file size: %d", expectedSize)
+			}
+		}
+	}
+
+	// Check if file already exists and has the correct size
+	log.Printf("TRACE: Checking if %s model file exists at %s", modelName, filepath)
 	if stat, err := os.Stat(filepath); err == nil && stat.Size() > 0 {
-		log.Printf("%s model already exists at %s. Skipping download.", modelName, filepath)
-		notifyProgress(DownloadProgress{
-			ModelName:  modelName,
-			Downloaded: stat.Size(),
-			Total:      stat.Size(),
-			Percent:    100.0,
-			Completed:  true,
-		})
-		return nil
+		log.Printf("TRACE: %s model file exists with size %d bytes", modelName, stat.Size())
+		// If we couldn't determine expected size or the file size matches the expected size, consider it complete
+		if expectedSize == -1 || stat.Size() == expectedSize {
+			log.Printf("TRACE: %s model file size check - expectedSize: %d, actualSize: %d", modelName, expectedSize, stat.Size())
+			// For unknown expected size, use a minimum size threshold (e.g., 100MB for LLM models)
+			if expectedSize == -1 {
+				// Minimum sizes for different model types (in bytes)
+				minLlamaSize := int64(1 * 1024 * 1024 * 1024) // 1GB minimum for Llama
+				minSDSize := int64(2 * 1024 * 1024 * 1024)    // 2GB minimum for Stable Diffusion
+
+				var minSize int64
+				if modelName == "Llama" {
+					minSize = minLlamaSize
+					log.Printf("TRACE: Using minimum size of %d bytes for Llama model", minSize)
+				} else if modelName == "StableDiffusion" {
+					minSize = minSDSize
+					log.Printf("TRACE: Using minimum size of %d bytes for StableDiffusion model", minSize)
+				} else {
+					minSize = int64(100 * 1024 * 1024) // 100MB default minimum
+					log.Printf("TRACE: Using default minimum size of %d bytes for unknown model type", minSize)
+				}
+
+				if stat.Size() < minSize {
+					log.Printf("%s model exists at %s but is too small (%d bytes). Minimum size: %d bytes. Redownloading.",
+						modelName, filepath, stat.Size(), minSize)
+					os.Remove(filepath)
+					log.Printf("TRACE: Removed %s model file due to insufficient size", modelName)
+					// Continue to download
+				} else {
+					log.Printf("%s model already exists at %s with sufficient size. Skipping download.", modelName, filepath)
+					log.Printf("TRACE: %s model file has sufficient size, setting download progress to complete", modelName)
+					notifyProgress(DownloadProgress{
+						ModelName:  modelName,
+						Downloaded: stat.Size(),
+						Total:      stat.Size(),
+						Percent:    100.0,
+						Completed:  true,
+					})
+					return nil
+				}
+			} else {
+				// We know the expected size and it matches
+				log.Printf("%s model already exists at %s with correct size. Skipping download.", modelName, filepath)
+				log.Printf("TRACE: %s model file has correct size, setting download progress to complete", modelName)
+				notifyProgress(DownloadProgress{
+					ModelName:  modelName,
+					Downloaded: stat.Size(),
+					Total:      stat.Size(),
+					Percent:    100.0,
+					Completed:  true,
+				})
+				return nil
+			}
+		} else {
+			// File exists but has incorrect size, remove it and redownload
+			log.Printf("%s model exists at %s but has incorrect size (%d vs expected %d). Redownloading.",
+				modelName, filepath, stat.Size(), expectedSize)
+			os.Remove(filepath)
+			log.Printf("TRACE: Removed %s model file due to incorrect size", modelName)
+		}
+	} else {
+		log.Printf("TRACE: %s model file does not exist or has zero size, will download", modelName)
 	}
 
 	log.Printf("Downloading %s model from %s to %s...", modelName, url, filepath)
-	resp, err := http.Get(url)
+	// Create a temporary file for downloading
+	tmpFilePath := filepath + ".tmp"
+
+	// Use the same client with redirect support
+	resp, err := client.Get(url)
 	if err != nil {
 		return fmt.Errorf("failed to send GET request: %w", err)
 	}
@@ -542,15 +664,22 @@ func downloadFile(url, filepath, modelName string, notifyProgress func(progress 
 		return fmt.Errorf("bad status: %s", resp.Status)
 	}
 
-	out, err := os.Create(filepath)
+	// Update expected size if we didn't get it from HEAD request
+	if expectedSize == -1 && resp.ContentLength > 0 {
+		expectedSize = resp.ContentLength
+		log.Printf("Got file size from GET request: %d bytes", expectedSize)
+	}
+
+	// Create a temporary file for downloading
+	out, err := os.Create(tmpFilePath)
 	if err != nil {
-		return fmt.Errorf("failed to create file %s: %w", filepath, err)
+		return fmt.Errorf("failed to create temporary file %s: %w", tmpFilePath, err)
 	}
 	defer out.Close()
 
 	writer := &ProgressWriter{
 		Writer:     out,
-		Total:      resp.ContentLength,
+		Total:      expectedSize, // Use our determined expected size
 		ModelName:  modelName,
 		OnProgress: notifyProgress,
 	}
@@ -558,27 +687,49 @@ func downloadFile(url, filepath, modelName string, notifyProgress func(progress 
 	_, err = io.Copy(writer, resp.Body)
 	if err != nil {
 		// Clean up partial download if error occurs
-		os.Remove(filepath)
+		os.Remove(tmpFilePath)
 		return fmt.Errorf("failed to write file: %w", err)
 	}
 
+	// Close the file before renaming
+	out.Close()
+
+	// Verify the downloaded file size
+	if stat, err := os.Stat(tmpFilePath); err == nil {
+		if expectedSize > 0 && stat.Size() != expectedSize {
+			os.Remove(tmpFilePath)
+			return fmt.Errorf("downloaded file size (%d) does not match expected size (%d)", stat.Size(), expectedSize)
+		}
+	}
+
+	// Rename the temporary file to the final filename
+	if err := os.Rename(tmpFilePath, filepath); err != nil {
+		os.Remove(tmpFilePath) // Clean up temp file if rename fails
+		return fmt.Errorf("failed to rename temporary file to final file: %w", err)
+	}
+
+	log.Printf("%s model downloaded successfully to %s", modelName, filepath)
 	return nil
 }
 
 // setupModels handles creating the model directory and downloading models.
 func setupModels(hub *Hub) error {
+	log.Println("Setting up models...")
+	log.Println("TRACE: Inside setupModels function")
 	modelDir, err := getModelDir()
 	if err != nil {
+		log.Printf("TRACE: Error getting model directory: %v", err)
 		initialDownloadError = err // Store error globally
 		return fmt.Errorf("failed to get model directory: %w", err)
 	}
+
+	log.Printf("Using model directory: %s", modelDir)
 
 	// Ensure the model directory exists
 	if err := os.MkdirAll(modelDir, 0755); err != nil {
 		initialDownloadError = err
 		return fmt.Errorf("failed to create model directory %s: %w", modelDir, err)
 	}
-
 
 	// Initialize global download status
 	llamaDownloadStatus = DownloadProgress{ModelName: "Llama"}
@@ -588,56 +739,136 @@ func setupModels(hub *Hub) error {
 	llamaModelPath = filepath.Join(modelDir, "llama-2-7b-chat.Q4_K_M.gguf")
 	sdModelPath = filepath.Join(modelDir, "v1-5-pruned-emaonly.safetensors") // SD model path setup re-added
 
+	log.Printf("Llama model path: %s", llamaModelPath)
+	log.Printf("Stable Diffusion model path: %s", sdModelPath)
+
 	// Callback function to update global status and broadcast
 	notifyFn := func(progress DownloadProgress) {
+		// Update download status under mutex protection
 		downloadStatusMutex.Lock()
-		defer downloadStatusMutex.Unlock()
 		if progress.ModelName == "Llama" {
 			llamaDownloadStatus = progress
 		} else if progress.ModelName == "StableDiffusion" { // SD progress update logic re-added
 			sdDownloadStatus = progress
 		}
 
-		// Send update to hub for broadcast
-		hub.statusUpdateChan <- ServerStatus{
-			Type:    "downloadProgress",
-			Message: fmt.Sprintf("Downloading Llama model: %.1f%%, Stable Diffusion model: %.1f%%", llamaDownloadStatus.Percent, sdDownloadStatus.Percent),
+		// Create status update while still holding mutex
+		status := ServerStatus{
+			Type:          "downloadProgress",
+			Message:       fmt.Sprintf("Downloading Llama model: %.1f%%, Stable Diffusion model: %.1f%%", llamaDownloadStatus.Percent, sdDownloadStatus.Percent),
 			LlamaProgress: llamaDownloadStatus,
 			SDProgress:    sdDownloadStatus, // SDProgress re-added
-			IsReady: false,
+			IsReady:       false,
 		}
+		downloadStatusMutex.Unlock()
+
+		// Send update to hub asynchronously to avoid blocking
+		go func() {
+			select {
+			case hub.statusUpdateChan <- status:
+				// Successfully sent update
+			case <-time.After(100 * time.Millisecond):
+				// Timeout if channel is blocked
+				log.Println("Warning: Status update dropped due to blocked channel")
+			}
+		}()
 	}
 
 	log.Println("Starting Llama model download/check...")
+	log.Println("TRACE: Before Llama model download")
 	llamaErr := downloadFile(llamaModelURL, llamaModelPath, "Llama", notifyFn)
+	log.Println("TRACE: After Llama model download")
 	if llamaErr != nil {
 		log.Printf("Failed to download Llama model: %v", llamaErr)
 		llamaDownloadStatus.ErrorMessage = llamaErr.Error()
 		initialDownloadError = fmt.Errorf("llama download failed: %w", llamaErr)
+		log.Printf("TRACE: Set initialDownloadError to: %v", initialDownloadError)
+	} else {
+		log.Println("TRACE: Llama model download/check completed successfully")
 	}
+
+	log.Println("TRACE: Llama model download/check completed, now proceeding to Stable Diffusion model")
+	log.Printf("TRACE: Llama download status: %+v", llamaDownloadStatus)
+	log.Printf("TRACE: SD download status: %+v", sdDownloadStatus)
+	log.Printf("TRACE: initialDownloadError: %v", initialDownloadError)
 
 	// Stable Diffusion download logic re-added
 	log.Println("Starting Stable Diffusion model download/check...")
+	log.Println("TRACE: Before Stable Diffusion model check")
+	log.Printf("TRACE: initialDownloadError before SD check: %v", initialDownloadError)
+
+	// Check if SD model exists before download
+	sdModelExists := false
+	sdModelSizeSufficient := false
+
+	if _, err := os.Stat(sdModelPath); err == nil {
+		log.Println("TRACE: Stable Diffusion model file exists")
+		sdModelExists = true
+		fileInfo, err := os.Stat(sdModelPath)
+		if err == nil && fileInfo.Size() > 0 {
+			log.Printf("Stable Diffusion model already exists at %s with size %d bytes", sdModelPath, fileInfo.Size())
+			// Check if size is at least 2GB (minimum size for SD model)
+			minSDSize := int64(2 * 1024 * 1024 * 1024) // 2GB minimum
+			if fileInfo.Size() >= minSDSize {
+				log.Printf("Stable Diffusion model size (%d bytes) is sufficient (>= %d bytes)", fileInfo.Size(), minSDSize)
+				log.Println("TRACE: Stable Diffusion model size is sufficient")
+				sdModelSizeSufficient = true
+			} else {
+				log.Printf("Stable Diffusion model size (%d bytes) is too small (< %d bytes)", fileInfo.Size(), minSDSize)
+				log.Println("TRACE: Stable Diffusion model size is too small")
+			}
+		} else {
+			log.Printf("TRACE: Error getting Stable Diffusion model file info: %v", err)
+		}
+	} else {
+		log.Printf("Stable Diffusion model does not exist at %s: %v", sdModelPath, err)
+		log.Println("TRACE: Stable Diffusion model file does not exist")
+	}
+
+	log.Printf("TRACE: SD model exists: %v, SD model size sufficient: %v", sdModelExists, sdModelSizeSufficient)
+	log.Printf("Attempting to download Stable Diffusion model from %s", sdModelURL)
+	log.Printf("IMPORTANT: About to call downloadFile for Stable Diffusion model")
+	log.Println("TRACE: Before Stable Diffusion model download")
+	log.Printf("TRACE: initialDownloadError before SD download: %v", initialDownloadError)
+
+	// If the model already exists with sufficient size, we might skip the actual download
+	if sdModelExists && sdModelSizeSufficient {
+		log.Println("TRACE: SD model exists with sufficient size, might skip actual download")
+	}
+
 	sdErr := downloadFile(sdModelURL, sdModelPath, "StableDiffusion", notifyFn)
+	log.Println("TRACE: After Stable Diffusion model download")
+	log.Printf("IMPORTANT: Returned from downloadFile for Stable Diffusion model with error: %v", sdErr)
+	log.Printf("TRACE: SD download status after download attempt: %+v", sdDownloadStatus)
+
 	if sdErr != nil {
 		log.Printf("Failed to download Stable Diffusion model: %v", sdErr)
 		sdDownloadStatus.ErrorMessage = sdErr.Error()
 		if initialDownloadError == nil { // Only set if no prior error
 			initialDownloadError = fmt.Errorf("stable diffusion download failed: %w", sdErr)
+			log.Printf("TRACE: Set initialDownloadError to: %v", initialDownloadError)
 		} else { // Append to existing error
 			initialDownloadError = fmt.Errorf("%w; stable diffusion download failed: %v", initialDownloadError, sdErr)
+			log.Printf("TRACE: Updated initialDownloadError to: %v", initialDownloadError)
 		}
+	} else {
+		log.Printf("TRACE: Stable Diffusion model download/check completed successfully")
 	}
 
+	log.Printf("TRACE: Final SD download status: %+v", sdDownloadStatus)
+	log.Printf("TRACE: Final initialDownloadError: %v", initialDownloadError)
+
+	log.Println("TRACE: Checking for download errors")
 	if initialDownloadError != nil {
 		log.Printf("Model download(s) failed. Server will not be fully functional. Error: %v", initialDownloadError)
 		// Update final status for clients
+		log.Println("TRACE: Sending download error status update")
 		hub.statusUpdateChan <- ServerStatus{
-			Type:    "downloadError",
-			Message: fmt.Sprintf("Error during model download: %v", initialDownloadError),
+			Type:          "downloadError",
+			Message:       fmt.Sprintf("Error during model download: %v", initialDownloadError),
 			LlamaProgress: llamaDownloadStatus,
 			SDProgress:    sdDownloadStatus, // SDProgress re-added
-			IsReady: false,
+			IsReady:       false,
 		}
 		return initialDownloadError
 	}
@@ -648,33 +879,68 @@ func setupModels(hub *Hub) error {
 	downloadStatusMutex.Unlock()
 
 	// Send final ready status
+	log.Println("TRACE: Sending ready status update")
 	hub.statusUpdateChan <- ServerStatus{
-		Type:    "serverReady",
-		Message: "Server is ready! You can start chatting.",
+		Type:          "serverReady",
+		Message:       "Server is ready! You can start chatting.",
 		LlamaProgress: llamaDownloadStatus,
 		SDProgress:    sdDownloadStatus, // SDProgress re-added
-		IsReady: true,
+		IsReady:       true,
 	}
+	log.Println("TRACE: setupModels function completed successfully")
 	return nil
 }
 
-
 func main() {
+	log.Println("Starting application...")
+
+	// Direct check for Stable Diffusion model file
+	modelDir, err := getModelDir()
+	if err != nil {
+		log.Printf("Error getting model directory: %v", err)
+	} else {
+		sdModelPath := filepath.Join(modelDir, "v1-5-pruned-emaonly.safetensors")
+		log.Printf("DIRECT CHECK: Checking for Stable Diffusion model at %s", sdModelPath)
+		if fileInfo, err := os.Stat(sdModelPath); err == nil {
+			log.Printf("DIRECT CHECK: Stable Diffusion model exists with size %d bytes", fileInfo.Size())
+			minSDSize := int64(2 * 1024 * 1024 * 1024) // 2GB minimum
+			if fileInfo.Size() >= minSDSize {
+				log.Printf("DIRECT CHECK: Stable Diffusion model size is sufficient (>= %d bytes)", minSDSize)
+			} else {
+				log.Printf("DIRECT CHECK: Stable Diffusion model size is too small (< %d bytes)", minSDSize)
+			}
+		} else {
+			log.Printf("DIRECT CHECK: Stable Diffusion model does not exist: %v", err)
+		}
+	}
+
 	hub := NewHub()
 	// Start the Hub's goroutine
+	log.Println("Starting hub...")
 	go hub.Run()
 
 	// Start model setup in a separate goroutine so main can proceed to serve static files
 	// Hub.Run() will block until models are ready.
+	log.Println("Starting model setup in background...")
 	go func() {
-		if err := setupModels(hub); err != nil {
-			log.Fatalf("Fatal error during model setup: %v", err)
-			// At this point, initialDownloadError is already set and broadcasted by setupModels
-			// If it's a fatal error, the server can't really function, so we might exit or go into a degraded mode.
-			// For now, let's just log and let Hub.Run's check handle it.
-		}
-	}()
+		// Add panic recovery
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("PANIC in model setup goroutine: %v", r)
+				debug.PrintStack()
+			}
+		}()
 
+		log.Println("Background goroutine for model setup started")
+		log.Println("IMPORTANT: About to call setupModels from goroutine")
+		if err := setupModels(hub); err != nil {
+			log.Printf("Error during model setup: %v", err)
+			// Don't use Fatalf as it will terminate the program
+			// initialDownloadError is already set and broadcasted by setupModels
+		}
+		log.Println("IMPORTANT: setupModels function completed in goroutine")
+		log.Println("Model setup completed successfully")
+	}()
 
 	// Serve static files (HTML, CSS, JS) from the embedded 'web' directory
 	fs := http.FileServer(http.FS(staticFiles))
@@ -684,9 +950,8 @@ func main() {
 
 	port := ":8080"
 	log.Printf("Server starting on port %s", port)
-	err := http.ListenAndServe(port, nil)
-	if err != nil {
-		log.Fatalf("Server failed to start: %v", err)
+	serverErr := http.ListenAndServe(port, nil)
+	if serverErr != nil {
+		log.Fatalf("Server failed to start: %v", serverErr)
 	}
 }
-

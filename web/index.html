@@ -183,6 +183,33 @@
             min-width: 100px;
             text-align: right;
         }
+        
+        /* Spinner for image generation */
+        .image-spinner-container {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-top: 10px;
+            padding: 15px;
+            background-color: #f0f8ff;
+            border-radius: 8px;
+            border: 1px dashed #b0c4de;
+        }
+        
+        .image-spinner {
+            border: 4px solid rgba(0, 0, 0, 0.1);
+            border-left-color: #007bff;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+            margin-right: 15px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
     </style>
 </head>
 <body>
@@ -254,6 +281,30 @@
                         sendButton.disabled = false;
                         chatInput.focus();
                     }
+                } else if (message.type === 'imageGenerationStart') {
+                    // Show spinner when image generation starts
+                    const lastAssistantMessage = document.querySelector('.message.assistant:last-child .message-content');
+                    if (lastAssistantMessage) {
+                        // Create spinner container if it doesn't exist
+                        if (!document.getElementById('image-spinner-container')) {
+                            const spinnerContainer = document.createElement('div');
+                            spinnerContainer.id = 'image-spinner-container';
+                            spinnerContainer.className = 'image-spinner-container';
+                            
+                            const spinner = document.createElement('div');
+                            spinner.className = 'image-spinner';
+                            
+                            const text = document.createElement('span');
+                            text.textContent = 'Generating image...';
+                            
+                            spinnerContainer.appendChild(spinner);
+                            spinnerContainer.appendChild(text);
+                            lastAssistantMessage.appendChild(spinnerContainer);
+                            
+                            // Scroll to bottom to show the spinner
+                            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+                        }
+                    }
                 } else if (message.type === 'downloadProgress') {
                     downloadStatusDiv.style.display = 'flex';
                     downloadMessage.innerText = message.Message;
@@ -317,6 +368,12 @@
                 appendMessage(msg, msg.role);
             });
             messagesDiv.scrollTop = messagesDiv.scrollHeight; // Scroll to bottom
+            
+            // Remove any spinner if present (image generation completed)
+            const spinnerContainer = document.getElementById('image-spinner-container');
+            if (spinnerContainer) {
+                spinnerContainer.remove();
+            }
         }
 
         function appendMessage(msg, role) {

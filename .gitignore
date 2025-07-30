@@ -38,3 +38,4 @@ main_macos_arm64
 
 # Build directory
 build/
+llama.*.log
