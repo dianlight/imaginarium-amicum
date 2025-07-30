@@ -6,20 +6,21 @@ import (
 	"embed"
 	"encoding/base64"
 	"fmt"
+	"image/png"
 	"io"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
-	"runtime"
 	"runtime/debug"
 	"strconv"
 	"sync"
 	"time"
+	"unsafe"
 
+	"github.com/binozo/gostablediffusion/pkg/sd"
 	"github.com/go-skynet/go-llama.cpp"
 	"github.com/gorilla/websocket"
-	sd "github.com/seasonjs/stable-diffusion" // Corrected Stable Diffusion binding
 )
 
 //go:embed web/*
@@ -72,7 +73,7 @@ type ChatSession struct {
 	conn         *websocket.Conn
 	history      []ChatMessage
 	llm          *llama.LLama
-	sdm          *sd.Model // Corrected Stable Diffusion instance type
+	sdCtx        *sd.Context // Updated to use GoStableDiffusion Context
 	messageLimit int
 
 	chatStage  int
@@ -154,7 +155,7 @@ func (h *Hub) Run() {
 	log.Printf("Initializing models with GPU layers: %d", gpuLayers)
 
 	var llm *llama.LLama
-	var sdm *sd.Model // Corrected sdm variable type
+	var sdCtx *sd.Context // Updated to use GoStableDiffusion Context
 	var err error
 
 	// Wait until models are downloaded or an error occurs
@@ -191,48 +192,44 @@ func (h *Hub) Run() {
 	}
 	defer llm.Free()
 
-	// Stable Diffusion Model initialization re-added
-	options := sd.DefaultOptions // Corrected: sd.DefaultOptions is a function
+	// Stable Diffusion initialization using GoStableDiffusion
+	log.Printf("Initializing Stable Diffusion with GoStableDiffusion")
 
-	// Try with GPU first if requested
-	if gpuLayers != 0 && runtime.GOOS != "darwin" {
+	// Set up logging callback
+	sd.SetLogCallback(func(level sd.LogLevel, text string, data unsafe.Pointer) {
+		switch level {
+		case sd.LogDebug:
+			log.Printf("SD DEBUG: %s", text)
+		case sd.LogInfo:
+			log.Printf("SD INFO: %s", text)
+		case sd.LogWarn:
+			log.Printf("SD WARN: %s", text)
+		case sd.LogError:
+			log.Printf("SD ERROR: %s", text)
+		default:
+			log.Printf("SD: %s", text)
+		}
+	})
+
+	// Initialize SD context with model
+	sdBuilder := sd.New().SetModel(sdModelPath)
+
+	// Try with GPU acceleration if requested
+	if gpuLayers != 0 {
 		log.Printf("Attempting to initialize Stable Diffusion with GPU acceleration")
-		options.GpuEnable = true
-
-		sdm, err = sd.NewAutoModel(options)
-		if err != nil {
-			log.Printf("Warning: GPU initialization for Stable Diffusion failed: %v", err)
-			log.Printf("Falling back to CPU-only mode for Stable Diffusion")
-
-			// Fall back to CPU
-			options.GpuEnable = false
-		}
-	} else {
-		options.GpuEnable = false
+		// Note: GoStableDiffusion uses different GPU acceleration methods
+		// We'll use Flash Attention for better performance if available
+		sdBuilder = sdBuilder.UseFlashAttn()
 	}
 
-	// If we haven't successfully created the model yet (either because GPU was not requested or GPU init failed)
-	if sdm == nil {
-		sdm, err = sd.NewAutoModel(options)
-		if err != nil {
-			log.Fatalf("Error initializing Stable Diffusion model: %v", err)
-		}
-	}
-
-	defer sdm.Close()
-
-	// seasonjs/stable-diffusion does not expose SetLogCallback
-	// sdm.SetLogCallback(func(level sd.LogLevel, msg string) {
-	// 	log.Println(msg)
-	// })
-
-	log.Printf("Loading Stable Diffusion model from %s", sdModelPath)
-	err = sdm.LoadFromFile(sdModelPath)
+	sdCtx, err = sdBuilder.Load()
 	if err != nil {
-		log.Fatalf("Error loading Stable Diffusion model from %s: %v", sdModelPath, err)
+		log.Fatalf("Error initializing Stable Diffusion model from %s: %v", sdModelPath, err)
 	}
 
-	log.Printf("Successfully loaded Stable Diffusion model (GPU enabled: %v)", options.GpuEnable)
+	defer sdCtx.Free()
+
+	log.Printf("Successfully loaded Stable Diffusion model")
 
 	log.Println("LLM and Stable Diffusion models initialized successfully.") // Updated log message
 
@@ -243,8 +240,8 @@ func (h *Hub) Run() {
 			session := &ChatSession{
 				conn:         conn,
 				history:      []ChatMessage{},
-				llm:          llm, // Assign the shared LLM instance
-				sdm:          sdm, // SD instance assignment re-added
+				llm:          llm,   // Assign the shared LLM instance
+				sdCtx:        sdCtx, // Updated SD context assignment
 				messageLimit: defaultMessageContextLimit,
 				chatStage:    StageLanguage, // Start at the language selection stage
 			}
@@ -424,37 +421,34 @@ func (h *Hub) handleChatMessage(session *ChatSession, userMessage ChatMessage) {
 	})
 
 	imagePrompt := fmt.Sprintf("Generate a realistic image based on this description from an AI assistant, keeping the language, setting, and character context in mind. Focus on key visual elements. Description: \"%s\"", assistantResponse)
-	// 5. Generate image based on AI response (re-added)
+	// 5. Generate image based on AI response using GoStableDiffusion
 	log.Printf("Generating image based on AI response: %s", assistantResponse)
-	// Optionally, add negative prompts or other SD parameters here
-	sdOpts := sd.DefaultFullParams
-	// NegativePrompt:   "out of frame, lowers, text, error, cropped, worst quality, low quality, jpeg artifacts, ugly, duplicate, morbid, mutilated, out of frame, extra fingers, mutated hands, poorly drawn hands, poorly drawn face, mutation, deformed, blurry, dehydrated, bad anatomy, bad proportions, extra limbs, cloned face, disfigured, gross proportions, malformed limbs, missing arms, missing legs, extra arms, extra legs, fused fingers, too many fingers, long neck, username, watermark, signature",
-	//CfgScale:         7.0,
-	//Width:            512,
-	//Height:           512,
-	//SampleMethod:     EULER_A,
-	//SampleSteps:      20,
-	sdOpts.SampleSteps = 1
-	//Strength:         0.4,
-	//Seed:             42,
-	sdOpts.Seed = time.Now().UnixNano() // Use a new seed for each image
-	//BatchCount:       1,
-	//OutputsImageType: PNG,
 
-	imgBuf := bytes.NewBuffer(make([]byte, 0, 1024*1024)) // Preallocate 1MB buffer for image data
-	var imgs []io.Writer
-	imgs = append(imgs, imgBuf)
-	err = session.sdm.Predict(imagePrompt, sdOpts, imgs)
+	// Create parameters for image generation
+	params := sd.NewDefaultParams()
+	params.CfgScale = 7.0
+	params.SampleSteps = 20 // Increased from 1 for better quality
+	params.SampleMethod = sd.Euler
+	params.Height = 512
+	params.Width = 512
+	params.Seed = time.Now().UnixNano() // Use a new seed for each image
+	params.Prompt = imagePrompt
+	// Optional negative prompt for better quality
+	params.NegativePrompt = "out of frame, text, error, cropped, worst quality, low quality, jpeg artifacts, ugly, duplicate, morbid, mutilated, extra fingers, mutated hands, poorly drawn hands, poorly drawn face, mutation, deformed, blurry, bad anatomy, bad proportions, extra limbs, cloned face, disfigured, gross proportions, malformed limbs, missing arms, missing legs, extra arms, extra legs, fused fingers, too many fingers, long neck, username, watermark, signature"
+
+	// Generate the image
+	result := session.sdCtx.Text2Img(params)
+
+	// Convert image to base64
+	imgBuf := bytes.NewBuffer(make([]byte, 0, 1024*1024))
+	err = png.Encode(imgBuf, result.Image())
 	if err != nil {
-		log.Printf("Stable Diffusion image generation error: %v", err)
-		// Set a placeholder image URL indicating an error
-		assistantMessage.Image = "https://placehold.co/400x300/e5e7eb/6b7280?text=Image+Gen+Failed"
+		log.Printf("Error encoding generated image to PNG: %v", err)
+		assistantMessage.Image = "https://placehold.co/400x300/e5e7eb/6b7280?text=Image+Encode+Failed"
 	} else {
 		assistantMessage.Image = "data:image/png;base64," + base64.StdEncoding.EncodeToString(imgBuf.Bytes())
 		log.Println("Image generated and base64 encoded successfully.")
 	}
-
-	assistantMessage.Image = "https://placehold.co/400x300/e5e7eb/6b7280?text=Image+Gen+Failed"
 
 	session.history[len(session.history)-1].Image = assistantMessage.Image
 

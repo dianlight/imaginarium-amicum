@@ -14,7 +14,7 @@ Local CPU Build:
 make build
 ```
 
-This will compile the Go application using CPU inference for go-llama.cpp and go-sd.cpp and create an executable ./main in your project root.
+This will compile the Go application using CPU inference for go-llama.cpp and GoStableDiffusion and create an executable ./main in your project root.
 
 Build CPU Docker Image:
 
