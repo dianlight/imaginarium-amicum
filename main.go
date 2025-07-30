@@ -269,7 +269,10 @@ func (h *Hub) Run() {
 
 			// Send the first chat prompt to the user only if the server is ready
 			if serverIsReady {
-				session.sendMessage("initialPrompt", "Hello! What language would you like to use for our chat?")
+				// Add the initial prompt to history so it persists
+				initialPrompt := ChatMessage{Role: "assistant", Content: "Hello! What language would you like to use for our chat?"}
+				session.history = append(session.history, initialPrompt)
+				session.sendChatUpdate() // Send the history with the initial prompt
 			}
 
 		case conn := <-h.unregister:
@@ -305,15 +308,18 @@ func (h *Hub) handleChatMessage(session *ChatSession, userMessage ChatMessage) {
 		session.language = userMessage.Content
 		session.history = append(session.history, userMessage) // Add user's language choice to history
 		session.chatStage = StageSetting
-		session.sendMessage("initialPrompt", "Great! Now, describe the general setting for our story/conversation (e.g., a futuristic city, a medieval kingdom, a quiet suburban house).")
+		// Add the next prompt to history
+		nextPrompt := ChatMessage{Role: "assistant", Content: "Great! Now, describe the general setting for our story/conversation (e.g., a futuristic city, a medieval kingdom, a quiet suburban house)."}
+		session.history = append(session.history, nextPrompt)
 		session.sendChatUpdate() // Send updated history to client
 		return                   // Do not proceed to LLM generation yet
 	case StageSetting:
 		session.setting = userMessage.Content
 		session.history = append(session.history, userMessage) // Add user's setting choice to history
 		session.chatStage = StageCharacter
-		// Updated message to include image generation context
-		session.sendMessage("initialPrompt", "Finally, tell me about the main character(s) characteristics (e.g., a brave knight, a curious scientist, a mischievous cat). I'll also try to build a contextualized image based on my responses.")
+		// Add the next prompt to history - Updated message to include image generation context
+		nextPrompt := ChatMessage{Role: "assistant", Content: "Finally, tell me about the main character(s) characteristics (e.g., a brave knight, a curious scientist, a mischievous cat). I'll also try to build a contextualized image based on my responses."}
+		session.history = append(session.history, nextPrompt)
 		session.sendChatUpdate() // Send updated history to client
 		return                   // Do not proceed to LLM generation yet
 	case StageCharacter:
@@ -421,7 +427,7 @@ func (h *Hub) handleChatMessage(session *ChatSession, userMessage ChatMessage) {
 	//Height:           512,
 	//SampleMethod:     EULER_A,
 	//SampleSteps:      20,
-	sdOpts.SampleSteps = 5
+	sdOpts.SampleSteps = 1
 	//Strength:         0.4,
 	//Seed:             42,
 	sdOpts.Seed = time.Now().UnixNano() // Use a new seed for each image
@@ -497,9 +503,11 @@ func (h *Hub) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			session.setting = ""
 			session.characters = ""
 			session.chatStage = StageLanguage // Reset stage to start setup again
+			// Add the initial prompt to history so it persists
+			initialPrompt := ChatMessage{Role: "assistant", Content: "Hello! What language would you like to use for our chat?"}
+			session.history = append(session.history, initialPrompt)
 			session.mu.Unlock()
-			session.sendChatUpdate()
-			session.sendMessage("initialPrompt", "Hello! What language would you like to use for our chat?") // Send first prompt
+			session.sendChatUpdate() // This will now include the initial prompt in the history
 			continue
 		}
 
