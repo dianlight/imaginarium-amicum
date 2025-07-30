@@ -338,7 +338,12 @@ func (h *Hub) handleChatMessage(session *ChatSession, userMessage ChatMessage) {
 	session.history = append(session.history, userMessage)
 	session.sendChatUpdate()
 
-	// 2. Summarize old messages if context limit is exceeded
+	// 2. Notify client that assistant is thinking
+	session.conn.WriteJSON(map[string]string{
+		"type": "assistantThinking",
+	})
+
+	// 3. Summarize old messages if context limit is exceeded
 	if len(session.history) > session.messageLimit {
 		log.Printf("Chat history exceeding limit (%d). Summarizing...", session.messageLimit)
 		summaryPrompt := "Summarize the following conversation concisely:\n"
@@ -373,11 +378,11 @@ func (h *Hub) handleChatMessage(session *ChatSession, userMessage ChatMessage) {
 		session.sendChatUpdate() // Send updated history with summary
 	}
 
-	// 3. Generate AI chat response using LLM
+	// 4. Generate AI chat response using LLM
 	var promptBuilder string
 
 	// Always prepend the fixed context (language, setting, characters)
-	fixedContext := fmt.Sprintf("The chat language is: %s. The setting is: %s. The main character(s) are: %s.\n",
+	fixedContext := fmt.Sprintf("The chat language is: %s. The setting is: %s. The main character(s) are: %s. The conversation follows. Reply as 'assistant:' followed by your reply. Make sure to follow the context. Do not repeat previous messages. Keep the tone consistent. Do not go off-topic. Only reply as 'assistant:', do not include any additional text.\n",
 		session.language, session.setting, session.characters)
 	promptBuilder += fixedContext
 
@@ -419,7 +424,7 @@ func (h *Hub) handleChatMessage(session *ChatSession, userMessage ChatMessage) {
 	})
 
 	imagePrompt := fmt.Sprintf("Generate a realistic image based on this description from an AI assistant, keeping the language, setting, and character context in mind. Focus on key visual elements. Description: \"%s\"", assistantResponse)
-	// 4. Generate image based on AI response (re-added)
+	// 5. Generate image based on AI response (re-added)
 	log.Printf("Generating image based on AI response: %s", assistantResponse)
 	// Optionally, add negative prompts or other SD parameters here
 	sdOpts := sd.DefaultFullParams

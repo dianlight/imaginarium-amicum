@@ -206,6 +206,36 @@
             margin-right: 15px;
         }
         
+        /* Spinner for assistant response */
+        .thinking-spinner-container {
+            display: flex;
+            align-items: center;
+            justify-content: flex-start;
+            margin: 15px 0;
+            padding: 12px 18px;
+            background-color: #f0f0f0;
+            border-radius: 20px;
+            border-bottom-left-radius: 2px;
+            max-width: 70%;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+        }
+        
+        .thinking-spinner {
+            border: 3px solid rgba(0, 0, 0, 0.1);
+            border-left-color: #007bff;
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            animation: spin 1s linear infinite;
+            margin-right: 12px;
+        }
+        
+        .thinking-text {
+            color: #666;
+            font-style: italic;
+            font-size: 0.95em;
+        }
+        
         @keyframes spin {
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
@@ -281,6 +311,9 @@
                         sendButton.disabled = false;
                         chatInput.focus();
                     }
+                } else if (message.type === 'assistantThinking') {
+                    // Show thinking spinner when assistant starts processing
+                    showThinkingSpinner();
                 } else if (message.type === 'imageGenerationStart') {
                     // Show spinner when image generation starts
                     const lastAssistantMessage = document.querySelector('.message.assistant:last-child .message-content');
@@ -362,6 +395,36 @@
             }
         }
 
+        function showThinkingSpinner() {
+            // Remove any existing thinking spinner first
+            hideThinkingSpinner();
+            
+            const thinkingContainer = document.createElement('div');
+            thinkingContainer.id = 'thinking-spinner-container';
+            thinkingContainer.className = 'thinking-spinner-container';
+            
+            const spinner = document.createElement('div');
+            spinner.className = 'thinking-spinner';
+            
+            const text = document.createElement('span');
+            text.className = 'thinking-text';
+            text.textContent = 'Assistant is thinking...';
+            
+            thinkingContainer.appendChild(spinner);
+            thinkingContainer.appendChild(text);
+            messagesDiv.appendChild(thinkingContainer);
+            
+            // Scroll to bottom to show the spinner
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+        
+        function hideThinkingSpinner() {
+            const thinkingContainer = document.getElementById('thinking-spinner-container');
+            if (thinkingContainer) {
+                thinkingContainer.remove();
+            }
+        }
+
         function renderMessages(history) {
             messagesDiv.innerHTML = ''; // Clear existing messages
             history.forEach(msg => {
@@ -369,10 +432,11 @@
             });
             messagesDiv.scrollTop = messagesDiv.scrollHeight; // Scroll to bottom
             
-            // Remove any spinner if present (image generation completed)
-            const spinnerContainer = document.getElementById('image-spinner-container');
-            if (spinnerContainer) {
-                spinnerContainer.remove();
+            // Remove any spinners if present
+            hideThinkingSpinner();
+            const imageSpinnerContainer = document.getElementById('image-spinner-container');
+            if (imageSpinnerContainer) {
+                imageSpinnerContainer.remove();
             }
         }
 
