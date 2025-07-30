@@ -105,7 +105,7 @@ build-macos-apple: ensure-llama-binding ensure-stablediffusion-binding ensure-go
 	go build $(LD_FLAGS_GPU) -o $(BUILD_DIR)/$(GO_BIN)_macos_arm64 .
 run-macos-apple: build-macos-apple
 	@echo "Running macOS (Apple Silicon - Metal GPU) build..."
-	./$(BUILD_DIR)/$(GO_BIN)_macos_arm64
+	DYLD_LIBRARY_PATH=./binding/gostablediffusion/stable-diffusion.cpp/build/bin/ ./$(BUILD_DIR)/$(GO_BIN)_macos_arm64
 
 # Windows (AMD64 CPU)
 .PHONY: build-windows-cpu run-windows-cpu
