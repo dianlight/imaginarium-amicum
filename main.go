@@ -175,13 +175,13 @@ func (h *Hub) Run() {
 
 	// Try to initialize with Metal first, if it fails, fall back to CPU
 	log.Printf("Attempting to initialize Llama LLM with Metal GPU acceleration (layers: %d)", gpuLayers)
-	llm, err = llama.New(llamaModelPath, llama.SetContext(defaultMessageContextLimit*2), llama.SetGPULayers(gpuLayers))
+	llm, err = llama.New(llamaModelPath, llama.SetContext(maxTokens), llama.SetGPULayers(gpuLayers))
 	if err != nil {
 		log.Printf("Warning: Metal GPU initialization failed: %v", err)
 		log.Printf("Falling back to CPU-only mode for Llama LLM")
 
 		// Fall back to CPU-only mode (0 GPU layers)
-		llm, err = llama.New(llamaModelPath, llama.SetContext(defaultMessageContextLimit*2), llama.SetGPULayers(0))
+		llm, err = llama.New(llamaModelPath, llama.SetContext(maxTokens), llama.SetGPULayers(0))
 		if err != nil {
 			log.Fatalf("Error initializing Llama LLM from %s even in CPU-only mode: %v", llamaModelPath, err)
 		}
@@ -326,9 +326,11 @@ func (h *Hub) handleChatMessage(session *ChatSession, userMessage ChatMessage) {
 		session.characters = userMessage.Content
 		session.history = append(session.history, userMessage) // Add user's character choice to history
 		session.chatStage = StageChatting
-		session.sendMessage("status", "Alright, let's start our chat! I'll generate responses and try to build contextualized images.") // Updated message
-		session.sendChatUpdate()                                                                                                        // Send updated history to client
-		// Fall through to normal chat processing now
+		nextPrompt := ChatMessage{Role: "assistant", Content: "Alright, let's start our chat! I'll generate responses and try to build contextualized images."}
+		session.history = append(session.history, nextPrompt)
+		session.sendChatUpdate()          // Send updated history to client
+		session.history = []ChatMessage{} // Clear history to start fresh for chatting stage
+		return                            // Send updated history to client
 	}
 
 	// For normal chatting stage:
