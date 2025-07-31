@@ -156,6 +156,54 @@ run-windows-ati: build-windows-ati
 	.\\$(BUILD_DIR)/$(GO_BIN)_windows_ati.exe
 
 
+# --- Test Targets per OS/Architecture ---
+
+.PHONY: test test-macos-apple test-linux-cpu test-linux-nvidia test-linux-ati test-windows-cpu test-windows-nvidia test-windows-ati
+
+test: test-macos-apple # Default test target for current platform
+
+test-macos-apple: ensure-go-modules
+	@echo "Running tests for macOS (Apple Silicon)..."
+	GOOS=darwin GOARCH=arm64 CGO_ENABLED=1 \
+	CGO_LDFLAGS="-framework Foundation -framework Metal -framework MetalKit -framework MetalPerformanceShaders" \
+	DYLD_LIBRARY_PATH=./binding/gostablediffusion/stable-diffusion.cpp/build/bin/ go test -v ./...
+
+test-linux-cpu: ensure-go-modules
+	@echo "Running tests for Linux (CPU)..."
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=1 \
+	go test -v ./...
+
+test-linux-nvidia: ensure-go-modules
+	@echo "Running tests for Linux (NVIDIA GPU)..."
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=1 \
+	CGO_LDFLAGS="-L/usr/local/cuda/lib64 -lcublas -lcudart" \
+	go test -v ./...
+
+test-linux-ati: ensure-go-modules
+	@echo "Running tests for Linux (AMD GPU - ROCm)..."
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=1 \
+	CC=/opt/rocm/llvm/bin/clang CXX=/opt/rocm/llvm/bin/clang++ \
+	CGO_LDFLAGS="-L/opt/rocm/lib -lrocblas -lhipblas -O3 --hip-link --rtlib=compiler-rt" \
+	go test -v ./...
+
+test-windows-cpu: ensure-go-modules
+	@echo "Running tests for Windows (CPU)..."
+	GOOS=windows GOARCH=amd64 CGO_ENABLED=1 \
+	go test -v ./...
+
+test-windows-nvidia: ensure-go-modules
+	@echo "Running tests for Windows (NVIDIA GPU)..."
+	GOOS=windows GOARCH=amd64 CGO_ENABLED=1 \
+	CGO_LDFLAGS="-L\"C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/vX.Y/lib/x64\" -lcublas -lcudart" \
+	go test -v ./...
+
+test-windows-ati: ensure-go-modules
+	@echo "Running tests for Windows (AMD GPU - ROCm)..."
+	GOOS=windows GOARCH=amd64 CGO_ENABLED=1 \
+	CC=/path/to/rocm/llvm/bin/clang CXX=/path/to/rocm/llvm/bin/clang++ \
+	CGO_LDFLAGS="-L/path/to/rocm/lib -lrocblas -lhipblas -O3 --hip-link --rtlib=compiler-rt" \
+	go test -v ./...
+
 # --- Clean Target ---
 
 .PHONY: clean
