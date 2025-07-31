@@ -76,6 +76,14 @@ func (h *Hub) handleClientConnection(conn *websocket.Conn, models *AIModels) {
 		messageLimit: defaultMessageContextLimit,
 		chatStage:    StageLanguage, // Start at the language selection stage
 	}
+
+	// Initialize memory database for this session
+	if err := session.initializeMemoryDB(); err != nil {
+		log.Printf("Failed to initialize memory database for client %s: %v", conn.RemoteAddr(), err)
+		conn.Close()
+		return
+	}
+
 	h.sessions[conn] = session
 	log.Printf("Client connected: %s", conn.RemoteAddr())
 
@@ -143,6 +151,11 @@ func (h *Hub) handleChatMessage(session *ChatSession, userMessage ChatMessage) {
 	session.history = append(session.history, userMessage)
 	session.sendChatUpdate()
 
+	// Store user message in characters collection
+	if err := session.storeCharacterMessage(userMessage.Role, userMessage.Content); err != nil {
+		log.Printf("Failed to store user message in memory database: %v", err)
+	}
+
 	// 2. Notify client that assistant is thinking
 	session.conn.WriteJSON(map[string]string{
 		"type": "assistantThinking",
@@ -160,6 +173,11 @@ func (h *Hub) handleChatMessage(session *ChatSession, userMessage ChatMessage) {
 	}
 	// Add assistant's text response to history
 	session.history = append(session.history, assistantMessage)
+
+	// Store assistant message in characters collection
+	if err := session.storeCharacterMessage(assistantMessage.Role, assistantMessage.Content); err != nil {
+		log.Printf("Failed to store assistant message in memory database: %v", err)
+	}
 
 	// 5. Generate image based on AI response
 	imageData := session.generateImage(assistantResponse)

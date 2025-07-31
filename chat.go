@@ -35,6 +35,12 @@ func (s *ChatSession) handleChatStages(userMessage ChatMessage) bool {
 		s.language = userMessage.Content
 		s.history = append(s.history, userMessage)
 		s.chatStage = StageSetting
+
+		// Store language in memory database
+		if err := s.storeContextInfo(); err != nil {
+			log.Printf("Failed to store language in memory database: %v", err)
+		}
+
 		nextPrompt := ChatMessage{
 			Role:    "assistant",
 			Content: "Great! Now, describe the general setting for our story/conversation (e.g., a futuristic city, a medieval kingdom, a quiet suburban house).",
@@ -47,6 +53,12 @@ func (s *ChatSession) handleChatStages(userMessage ChatMessage) bool {
 		s.setting = userMessage.Content
 		s.history = append(s.history, userMessage)
 		s.chatStage = StageCharacter
+
+		// Store setting in memory database
+		if err := s.storeContextInfo(); err != nil {
+			log.Printf("Failed to store setting in memory database: %v", err)
+		}
+
 		nextPrompt := ChatMessage{
 			Role:    "assistant",
 			Content: "Finally, tell me about the main character(s) characteristics (e.g., a brave knight, a curious scientist, a mischievous cat). I'll also try to build a contextualized image based on my responses.",
@@ -59,6 +71,12 @@ func (s *ChatSession) handleChatStages(userMessage ChatMessage) bool {
 		s.characters = userMessage.Content
 		s.history = append(s.history, userMessage)
 		s.chatStage = StageChatting
+
+		// Store characters in memory database
+		if err := s.storeContextInfo(); err != nil {
+			log.Printf("Failed to store characters in memory database: %v", err)
+		}
+
 		nextPrompt := ChatMessage{
 			Role:    "assistant",
 			Content: "Alright, let's start our chat! I'll generate responses and try to build contextualized images.",
@@ -111,6 +129,12 @@ func (s *ChatSession) summarizeHistory() {
 // generateAIResponse generates an AI chat response using LLM
 func (s *ChatSession) generateAIResponse() string {
 	var promptBuilder string
+
+	// Get enhanced context from memory database
+	enhancedContext := s.getEnhancedContext()
+	if enhancedContext != "" {
+		promptBuilder += enhancedContext
+	}
 
 	// Always prepend the fixed context (language, setting, characters)
 	fixedContext := fmt.Sprintf("The chat language is: %s. The setting is: %s. The main character(s) are: %s."+
@@ -195,6 +219,13 @@ func (s *ChatSession) resetSession() {
 	s.setting = ""
 	s.characters = ""
 	s.chatStage = StageLanguage
+
+	// Clear and reinitialize memory database
+	if err := s.clearMemoryDB(); err != nil {
+		log.Printf("Failed to clear memory database during reset: %v", err)
+	} else {
+		log.Println("Memory database cleared and reinitialized for new chat session")
+	}
 
 	// Add the initial prompt to history
 	initialPrompt := ChatMessage{

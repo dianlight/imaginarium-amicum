@@ -8,6 +8,7 @@ import (
 	"github.com/binozo/gostablediffusion/pkg/sd"
 	"github.com/go-skynet/go-llama.cpp"
 	"github.com/gorilla/websocket"
+	"github.com/philippgille/chromem-go"
 )
 
 // Constants
@@ -50,6 +51,11 @@ type ChatSession struct {
 	language   string
 	setting    string
 	characters string
+
+	// Memory databases
+	memoryDB             *chromem.DB
+	contextCollection    *chromem.Collection
+	charactersCollection *chromem.Collection
 }
 
 // DownloadProgress represents the progress of a single model download
