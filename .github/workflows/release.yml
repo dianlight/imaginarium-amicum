@@ -32,7 +32,7 @@ jobs:
 
     steps:
       - name: Checkout code (needed for gh cli and context)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set release tag from push commit message
         id: set_tag_push
@@ -86,7 +86,7 @@ jobs:
     needs: get-release-version # Depends on the version determination and existence check
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           submodules: recursive
 
@@ -131,7 +131,7 @@ jobs:
     needs: get-release-version # Depends on the version determination and existence check
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           submodules: recursive
 
@@ -182,7 +182,7 @@ jobs:
     needs: get-release-version # Depends on the version determination and existence check
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           submodules: recursive
 
@@ -236,7 +236,7 @@ jobs:
     needs: get-release-version # Depends on the version determination and existence check
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           submodules: recursive
 
@@ -281,7 +281,7 @@ jobs:
     needs: get-release-version # Depends on the version determination and existence check
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           submodules: recursive
 
@@ -326,7 +326,7 @@ jobs:
     needs: get-release-version # Depends on the version determination and existence check
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           submodules: recursive
 
@@ -384,7 +384,7 @@ jobs:
     needs: get-release-version # Depends on the version determination and existence check
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           submodules: recursive
 
@@ -451,7 +451,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Get release tag from previous job
         id: get_tag
