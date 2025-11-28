@@ -117,7 +117,7 @@ jobs:
         run: make build-linux-cpu
 
       - name: Upload Linux CPU Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: imaginarium-amicum-linux-cpu
           path: build/main_linux_amd64
@@ -168,7 +168,7 @@ jobs:
         run: make build-linux-nvidia
 
       - name: Upload Linux NVIDIA GPU Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: imaginarium-amicum-linux-nvidia
           path: build/main_linux_nvidia
@@ -223,7 +223,7 @@ jobs:
         run: make build-linux-ati
 
       - name: Upload Linux AMD GPU Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: imaginarium-amicum-linux-ati
           path: build/main_linux_ati
@@ -267,7 +267,7 @@ jobs:
         run: make build-macos-apple
 
       - name: Upload macOS Apple Silicon Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: imaginarium-amicum-macos-apple
           path: build/main_macos_arm64
@@ -312,7 +312,7 @@ jobs:
         run: make build-windows-cpu
 
       - name: Upload Windows CPU Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: imaginarium-amicum-windows-cpu
           path: build/main_windows_amd64.exe
@@ -370,7 +370,7 @@ jobs:
         run: make build-windows-nvidia
 
       - name: Upload Windows NVIDIA GPU Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: imaginarium-amicum-windows-nvidia
           path: build/main_windows_nvidia.exe
@@ -428,7 +428,7 @@ jobs:
         run: make build-windows-ati
 
       - name: Upload Windows AMD GPU Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: imaginarium-amicum-windows-ati
           path: build/main_windows_ati.exe
@@ -458,7 +458,7 @@ jobs:
         run: echo "RELEASE_TAG=${{ needs.get-release-version.outputs.release_tag }}" >> $GITHUB_ENV
 
       - name: Download all build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v6
         with:
           path: ./release_artifacts
 
